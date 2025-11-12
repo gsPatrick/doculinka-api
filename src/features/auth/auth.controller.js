@@ -2,45 +2,60 @@
 
 const authService = require('./auth.service');
 
-const startLogin = async (req, res, next) => {
+/**
+ * Controller para o registro de um novo usuário.
+ * Recebe nome, e-mail e senha, e repassa para o serviço de autenticação.
+ */
+const register = async (req, res, next) => {
   try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: 'O e-mail é obrigatório.' });
+    const { name, email, password } = req.body;
+
+    // Validação de entrada básica
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios.' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'A senha deve ter no mínimo 6 caracteres.' });
     }
 
-    await authService.startEmailLogin(email);
+    const { accessToken, refreshToken, user } = await authService.registerUser({ name, email, password });
 
-    // Por segurança, sempre retorne uma mensagem genérica para não revelar
-    // se um e-mail está ou não cadastrado no sistema (evita enumeração de usuários).
-    return res.status(200).json({
-      message: 'Se o e-mail estiver cadastrado, um código de verificação foi enviado.'
-    });
+    // Retorna os tokens e os dados do usuário recém-criado
+    return res.status(201).json({ accessToken, refreshToken, user });
 
   } catch (error) {
-    next(error); // Passa o erro para o handler de erros global
-  }
-};
-
-const verifyLogin = async (req, res, next) => {
-  try {
-    const { email, otp } = req.body;
-    if (!email || !otp) {
-      return res.status(400).json({ message: 'E-mail e código OTP são obrigatórios.' });
-    }
-
-    // O serviço retornará os tokens se a verificação for bem-sucedida
-    const { accessToken, refreshToken } = await authService.verifyEmailOtp(email, otp);
-
-    return res.status(200).json({ accessToken, refreshToken });
-
-  } catch (error) {
-    // O serviço vai lançar um erro que será capturado aqui
-    // Ex: código inválido, expirado, etc.
+    // Passa o erro para o middleware de tratamento de erros global.
+    // Isso capturará erros como "e-mail já em uso".
     next(error);
   }
 };
 
+/**
+ * Controller para o login do usuário.
+ * Recebe e-mail e senha e repassa para o serviço de autenticação.
+ */
+const login = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validação de entrada
+    if (!email || !password) {
+      return res.status(400).json({ message: 'E-mail and password are required.' });
+    }
+
+    const { accessToken, refreshToken, user } = await authService.loginUser(email, password);
+
+    // Retorna os tokens e os dados do usuário logado
+    return res.status(200).json({ accessToken, refreshToken, user });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller para renovar um access token usando um refresh token.
+ */
 const refreshToken = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
@@ -56,6 +71,9 @@ const refreshToken = async (req, res, next) => {
   }
 };
 
+/**
+ * Controller para realizar o logout, invalidando o refresh token.
+ */
 const logout = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
@@ -63,7 +81,7 @@ const logout = async (req, res, next) => {
       return res.status(400).json({ message: 'Refresh token é obrigatório.' });
     }
     
-    // O req.user é fornecido pelo authGuard
+    // O req.user é fornecido pelo authGuard, garantindo que o usuário está logado
     await authService.handleLogout(refreshToken, req.user);
     return res.status(200).json({ message: 'Logout realizado com sucesso.' });
   } catch (error) {
@@ -71,9 +89,10 @@ const logout = async (req, res, next) => {
   }
 };
 
+
 module.exports = {
-  startLogin,
-  verifyLogin,
+  register,
+  login,
   refreshToken,
   logout,
 };
