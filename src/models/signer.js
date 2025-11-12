@@ -33,6 +33,10 @@ module.exports = (sequelize, DataTypes) => {
   type: DataTypes.STRING,
   allowNull: true,
 },
+    qualification: {
+      type: DataTypes.STRING,
+      allowNull: true, // Pode ser opcional
+    },
     cpf: DataTypes.STRING,
     phoneWhatsE164: DataTypes.STRING,
     authChannels: {

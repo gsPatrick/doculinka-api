@@ -174,6 +174,7 @@ const addSignersToDocument = async (docId, signers, user) => {
         signaturePositionX: signerData.position?.x,
         signaturePositionY: signerData.position?.y,
         signaturePositionPage: signerData.position?.page,
+        qualification: signerData.qualification, // <-- ADICIONE ESTA LINHAs
         // ---------------------------------
       }, { transaction });
 
