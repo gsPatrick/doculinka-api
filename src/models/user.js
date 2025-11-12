@@ -34,7 +34,12 @@ module.exports = (sequelize, DataTypes) => {
       unique: true,
       validate: {
         isEmail: true
-      }
+      },
+          // --- NOVO CAMPO ---
+    passwordHash: {
+      type: DataTypes.STRING,
+      allowNull: false, // Senha é obrigatória
+    },
     },
     cpf: {
       type: DataTypes.STRING,

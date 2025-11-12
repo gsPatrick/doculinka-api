@@ -2,17 +2,15 @@
 
 const { Router } = require('express');
 const authController = require('./auth.controller');
-const authGuard = require('../../middlewares/authGuard'); // Precisamos do authGuard para o logout
+const authGuard = require('../../middlewares/authGuard');
 
 const router = Router();
 
-// Rota para iniciar o processo de login: o usuário envia o e-mail
-router.post('/email/start', authController.startLogin);
+// Rota para cadastrar um novo usuário (e seu tenant)
+router.post('/register', authController.register);
 
-// Rota para verificar o OTP e o e-mail para completar o login
-router.post('/email/verify', authController.verifyLogin);
-
-// --- NOVAS ROTAS ---
+// Rota para fazer login com e-mail e senha
+router.post('/login', authController.login);
 
 // Rota para obter um novo access token usando um refresh token
 router.post('/refresh', authController.refreshToken);
