@@ -9,4 +9,13 @@ const list = async (req, res, next) => {
   }
 };
 
-module.exports = { list };
+const create = async (req, res, next) => {
+  try {
+    const newSignatory = await signatoryService.createSignatoryContact(req.user, req.body);
+    res.status(201).json(newSignatory);
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { list, create };

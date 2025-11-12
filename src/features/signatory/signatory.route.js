@@ -7,5 +7,7 @@ router.use(authGuard);
 
 // Rota para listar os signatários únicos de um usuário
 router.get('/', signatoryController.list);
+router.post('/', signatoryController.create); // <-- ADICIONE ESTA LINHA
+
 
 module.exports = router;
