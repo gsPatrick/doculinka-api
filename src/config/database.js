@@ -1,40 +1,45 @@
 // src/config/database.js
 
+// É crucial carregar o dotenv aqui também, para que o Sequelize-CLI
+// e a aplicação possam acessar as variáveis de ambiente ao ler este arquivo.
 require('dotenv').config();
-const { Sequelize } = require('sequelize');
 
-// Criação da instância Sequelize usando variáveis do .env
-const sequelize = new Sequelize(
-  process.env.DB_NAME,        // Nome do banco de dados
-  process.env.DB_USER,        // Usuário
-  process.env.DB_PASSWORD,    // Senha
-  {
-    host: process.env.DB_HOST, // Host do banco
-    port: process.env.DB_PORT || 5432, // Porta padrão PostgreSQL
+module.exports = {
+  // Configuração para o ambiente de desenvolvimento
+  development: {
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
     dialect: 'postgres',
-    logging: false, // Mude para console.log se quiser ver as queries no console
+  },
+  
+  // Configuração para o ambiente de testes (se você for adicionar testes)
+  test: {
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: `${process.env.DB_NAME}_test`,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    dialect: 'postgres',
+    logging: false, // Desliga os logs do SQL durante os testes
+  },
+  
+  // Configuração para o ambiente de produção
+  production: {
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    dialect: 'postgres',
     dialectOptions: {
-      ssl: process.env.DB_SSL === 'true' ? { require: true, rejectUnauthorized: false } : false,
+      ssl: {
+        require: true,
+        rejectUnauthorized: false // Esta opção pode ser necessária dependendo do seu provedor de DB
+      }
     },
-    pool: {
-      max: 10,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
-  }
-);
-
-// Função para testar a conexão
-async function testConnection() {
-  try {
-    await sequelize.authenticate();
-    console.log('✅ Conexão com o banco de dados estabelecida com sucesso!');
-  } catch (error) {
-    console.error('❌ Erro ao conectar com o banco de dados:', error.message);
-  }
-}
-
-testConnection();
-
-module.exports = sequelize;
+    logging: false, // Desliga os logs do SQL em produção por performance
+  },
+};
