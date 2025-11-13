@@ -3,12 +3,12 @@
 
 const fs = require('fs/promises');
 const path = require('path');
-const { PDFDocument, rgb } = require('pdf-lib');
+const { PDFDocument } = require('pdf-lib');
 
 /**
- * Embute as imagens das assinaturas em um documento PDF.
+ * Embute as imagens das assinaturas em um documento PDF em posições fixas.
  * @param {string} originalPdfPath - Caminho para o PDF original.
- * @param {Array<object>} signers - Lista de objetos de signatários que assinaram.
+ * @param {Array<object>} signers - Lista de signatários que assinaram.
  * @returns {Buffer} - O buffer do novo PDF com as assinaturas embutidas.
  */
 const embedSignatures = async (originalPdfPath, signers) => {
@@ -16,36 +16,53 @@ const embedSignatures = async (originalPdfPath, signers) => {
     const pdfBuffer = await fs.readFile(originalPdfPath);
     const pdfDoc = await PDFDocument.load(pdfBuffer);
 
-    for (const signer of signers) {
-      // Pula se o signatário não tiver uma assinatura ou posição definida
-      if (!signer.signatureArtefactPath || signer.signaturePositionX == null) {
+    // --- LÓGICA DE POSICIONAMENTO FIXO ---
+
+    // Define as dimensões do carimbo de assinatura
+    const stampWidth = 180;
+    const stampHeight = 65;
+    const verticalMargin = 30; // Margem de baixo para o primeiro carimbo
+    const spacingBetweenStamps = 10; // Espaçamento vertical entre múltiplos carimbos
+
+    // Pega a última página do documento para adicionar as assinaturas
+    const lastPage = pdfDoc.getPage(pdfDoc.getPageCount() - 1);
+    const { width: pageWidth, height: pageHeight } = lastPage.getSize();
+    
+    // Calcula a posição X para centralizar horizontalmente
+    const xPos = (pageWidth - stampWidth) / 2;
+    
+    // Itera sobre cada signatário para desenhar seu carimbo
+    for (let i = 0; i < signers.length; i++) {
+      const signer = signers[i];
+
+      // Pula se o signatário não tiver uma imagem de assinatura salva
+      if (!signer.signatureArtefactPath) {
+        console.warn(`[PDF Service] Signatário ${signer.name} pulado: sem artefato de assinatura.`);
         continue;
       }
-      
-      const pageIndex = (signer.signaturePositionPage || 1) - 1;
-      const page = pdfDoc.getPages()[pageIndex];
-      if (!page) continue;
 
       // Carrega a imagem da assinatura
       const signatureImagePath = path.join(__dirname, '..', '..', signer.signatureArtefactPath);
       const signatureImageBytes = await fs.readFile(signatureImagePath);
       const signatureImage = await pdfDoc.embedPng(signatureImageBytes);
-
-      // Converte as coordenadas salvas para o sistema da pdf-lib (canto inferior esquerdo)
-      const { height } = page.getSize();
-      const x = signer.signaturePositionX;
-      const y = height - signer.signaturePositionY - 70; // 70 é a altura aproximada do carimbo
+      
+      // Calcula a posição Y para cada carimbo, empilhando-os de baixo para cima
+      const yPos = verticalMargin + (i * (stampHeight + spacingBetweenStamps));
 
       // Desenha a imagem da assinatura na página
-      page.drawImage(signatureImage, {
-        x: x,
-        y: y,
-        width: 150, // Largura fixa para o carimbo
-        height: 56, // Altura fixa para o carimbo
+      lastPage.drawImage(signatureImage, {
+        x: xPos,
+        y: yPos,
+        width: stampWidth,
+        height: stampHeight,
       });
-    }
 
-    // Salva o PDF modificado em um novo buffer
+      // Opcional: Adicionar texto abaixo da assinatura (nome, data, etc.)
+      // const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      // lastPage.drawText(`Assinado por: ${signer.name}`, { x: xPos, y: yPos - 12, size: 8 });
+    }
+    // ------------------------------------
+
     const finalPdfBytes = await pdfDoc.save();
     return Buffer.from(finalPdfBytes);
 
