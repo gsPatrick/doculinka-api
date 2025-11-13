@@ -1,8 +1,8 @@
-// src/features/signatory/signatory.route.js
+// src/features/contact/contact.route.js
 'use strict';
 
 const { Router } = require('express');
-const signatoryController = require('./signatory.controller');
+const contactController = require('./contact.controller');
 const authGuard = require('../../middlewares/authGuard'); // Middleware para proteger as rotas
 
 // Cria uma nova instância do roteador do Express
@@ -12,8 +12,7 @@ const router = Router();
 // APLICA O MIDDLEWARE DE AUTENTICAÇÃO
 // -----------------------------------------------------------------------------
 // router.use() aplica o middleware a TODAS as rotas definidas neste arquivo.
-// Isso garante que nenhum usuário não autenticado possa listar ou criar signatários.
-// O authGuard irá verificar o token JWT e anexar o objeto 'user' à requisição (req.user).
+// Isso garante que apenas um usuário autenticado possa acessar sua lista de contatos.
 router.use(authGuard);
 
 
@@ -22,19 +21,19 @@ router.use(authGuard);
 // -----------------------------------------------------------------------------
 
 /**
- * @route   GET /api/signatories
- * @desc    Lista todos os contatos de signatários únicos associados ao usuário logado.
- * @access  Private
+ * @route   GET /api/contacts
+ * @desc    Lista todos os contatos pertencentes ao usuário logado.
+ * @access  Private (protegido pelo authGuard)
  */
-router.get('/', signatoryController.list);
+router.get('/', contactController.list);
 
 
 /**
- * @route   POST /api/signatories
- * @desc    Cria um novo contato de signatário na lista do usuário logado.
- * @access  Private
+ * @route   POST /api/contacts
+ * @desc    Cria um novo contato na lista do usuário logado ou atualiza um existente.
+ * @access  Private (protegido pelo authGuard)
  */
-router.post('/', signatoryController.create);
+router.post('/', contactController.create);
 
 
 // Exporta o roteador configurado para ser usado no arquivo principal de rotas (src/routes/index.js)

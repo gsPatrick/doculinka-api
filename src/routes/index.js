@@ -8,7 +8,7 @@ const documentRoutes = require('../features/document/document.route');
 const tenantRoutes = require('../features/tenant/tenant.route');
 const signerRoutes = require('../features/signer/signer.route');
 const userRoutes = require('../features/user/user.route');
-const signatoryRoutes = require('../features/signatory/signatory.route');
+const contactRoutes = require('../features/contact/contact.route'); // <-- ADICIONE ESTA LINHA
 
 // 2. Cria uma instância do roteador principal.
 const router = Router();
@@ -29,7 +29,7 @@ router.use('/sign', signerRoutes);
 // Requisições para '/api/users' (para dados do usuário logado, como /users/me)
 router.use('/users', userRoutes);
 
-router.use('/signatories', signatoryRoutes); // <-- ADICIONE ESTA LINHA
+router.use('/contacts', contactRoutes); // <-- ADICIONE ESTA LINHA
 
 
 // Opcional: Uma rota "health check" para verificar se a API está no ar.
