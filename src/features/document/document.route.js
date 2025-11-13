@@ -44,5 +44,8 @@ router.post('/:id/expire', documentController.expireDocument);
 router.post('/:id/pades', authGuard, documentController.applyPades);
 router.get('/', documentController.getAllDocuments);
 
+// IMPORTANTE: Coloque esta rota ANTES da rota com /:id para que 'stats' не seja interpretado como um ID.
+router.get('/stats', documentController.getStats);
+// 
 
 module.exports = router;

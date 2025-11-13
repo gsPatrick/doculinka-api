@@ -314,6 +314,28 @@ const findAllDocuments = async (user, status) => {
         // include: [{ model: Signer, as: 'Signers'}]
     });
 };
+
+const getDocumentStats = async (user) => {
+  const ownerId = user.id;
+
+  // Executa todas as contagens em paralelo para máxima eficiência
+  const [pendingCount, signedCount, totalCount] = await Promise.all([
+    // Conta documentos pendentes (Prontos para assinar ou Parcialmente assinados)
+    Document.count({ where: { ownerId, status: { [Op.in]: ['READY', 'PARTIALLY_SIGNED'] } } }),
+    // Conta documentos finalizados
+    Document.count({ where: { ownerId, status: 'SIGNED' } }),
+    // Conta o total de documentos (excluindo os da lixeira)
+    Document.count({ where: { ownerId, status: { [Op.notIn]: ['CANCELLED'] } } })
+  ]);
+
+  return {
+    pending: pendingCount,
+    signed: signedCount,
+    total: totalCount,
+    // Você pode adicionar outras estatísticas aqui, como 'expired' ou 'cancelled'
+  };
+};
+
 module.exports = {
   createAuditLog,
   createDocumentAndHandleUpload,
@@ -324,5 +346,6 @@ module.exports = {
   findAuditTrail,
   changeDocumentStatus,
   getDocumentDownloadUrl,
-  findAllDocuments
+  findAllDocuments,
+  getDocumentStats
 };
