@@ -1,9 +1,17 @@
+// src/models/user.js
 'use strict';
+
 const { Model } = require('sequelize');
 
 module.exports = (sequelize, DataTypes) => {
   class User extends Model {
+    /**
+     * Helper method for defining associations.
+     * This method is not a part of Sequelize lifecycle.
+     * The `models/index` file will call this method automatically.
+     */
     static associate(models) {
+      // Define as associações aqui
       User.belongsTo(models.Tenant, { foreignKey: 'tenantId', as: 'tenant' });
       User.hasMany(models.Session, { foreignKey: 'userId' });
       User.hasMany(models.Document, { foreignKey: 'ownerId', as: 'ownedDocuments' });
@@ -19,10 +27,7 @@ module.exports = (sequelize, DataTypes) => {
     tenantId: {
       type: DataTypes.UUID,
       allowNull: false,
-      references: {
-        model: 'Tenants',
-        key: 'id'
-      }
+      references: { model: 'Tenants', key: 'id' }
     },
     name: {
       type: DataTypes.STRING,
@@ -32,29 +37,21 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-      validate: {
-        isEmail: true
-      },
-      // --- ATUALIZAÇÕES ---
+      validate: { isEmail: true }
+    },
     cpf: {
       type: DataTypes.STRING,
-      allowNull: false, // CPF agora é obrigatório no cadastro
+      allowNull: true,
       unique: true
     },
-    phoneWhatsE164: { // O nome do campo no DB já é o correto
-        type: DataTypes.STRING,
-        allowNull: false, // Celular agora é obrigatório
+    phoneWhatsE164: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
-   passwordHash: {
+    passwordHash: {
       type: DataTypes.STRING,
       allowNull: false
     },
-    },
-    cpf: {
-      type: DataTypes.STRING,
-      unique: true
-    },
-    phoneWhatsE164: DataTypes.STRING,
     status: {
       type: DataTypes.STRING,
       defaultValue: 'ACTIVE',
@@ -64,7 +61,22 @@ module.exports = (sequelize, DataTypes) => {
     sequelize,
     modelName: 'User',
     timestamps: true,
-    updatedAt: false
+    updatedAt: false, // Não usamos o campo updatedAt neste modelo
+
+    // --- ESCOPOS PARA CONTROLE DE ATRIBUTOS ---
+    defaultScope: {
+      // Por padrão, SEMPRE exclui o hash da senha de qualquer busca (find, findOne, findAll, etc.)
+      // Isso é uma medida de segurança para evitar vazamento acidental do hash.
+      attributes: { exclude: ['passwordHash'] }
+    },
+    scopes: {
+      // Um escopo nomeado que pode ser chamado explicitamente para incluir o passwordHash.
+      // Usaremos User.scope('withPassword')... quando precisarmos validar a senha.
+      withPassword: {
+        attributes: { include: ['passwordHash'] }
+      }
+    }
+    // ----------------------------------------
   });
   return User;
 };

@@ -5,38 +5,65 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { User, Tenant, Session, sequelize } = require('../../models');
 
-// --- Funções Auxiliares Internas ---
+// --- FUNÇÕES AUXILIARES INTERNAS ---
 
 /**
  * Gera um 'slug' seguro para URL a partir de um nome.
+ * @param {string} name - O nome a ser convertido.
+ * @returns {string}
  */
 const generateSlug = (name) => {
   if (!name) return '';
-  return name.toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 };
 
 /**
- * Gera um par de tokens (access e refresh) para um usuário.
+ * Gera um par de tokens (access e refresh) para um usuário autenticado.
+ * @param {User} user - O objeto do usuário do Sequelize.
+ * @returns {{accessToken: string, refreshToken: string}}
  */
 const generateTokens = (user) => {
-  const accessToken = jwt.sign({ userId: user.id, tenantId: user.tenantId }, process.env.JWT_SECRET, { expiresIn: '15m' });
-  const refreshToken = jwt.sign({ userId: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+  const accessToken = jwt.sign(
+    { userId: user.id, tenantId: user.tenantId },
+    process.env.JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+
+  const refreshToken = jwt.sign(
+    { userId: user.id },
+    process.env.JWT_REFRESH_SECRET,
+    { expiresIn: '7d' }
+  );
+
   return { accessToken, refreshToken };
 };
 
 /**
  * Salva a sessão do refresh token no banco de dados.
+ * @param {string} userId - ID do usuário.
+ * @param {string} refreshToken - O token de refresh.
  */
 const saveSession = async (userId, refreshToken) => {
   const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  await Session.create({ userId, refreshTokenHash, expiresAt });
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias
+
+  await Session.create({
+    userId,
+    refreshTokenHash,
+    expiresAt,
+  });
 };
 
-// --- Funções de Serviço Principais (Exportadas) ---
+
+// --- FUNÇÕES DE SERVIÇO PRINCIPAIS (EXPORTADAS) ---
 
 /**
- * Cadastra um novo usuário e seu Tenant associado.
+ * Cadastra um novo usuário, com validações e logs de depuração para a senha.
  */
 const registerUser = async (userData) => {
   const { name, email, password, cpf, phone } = userData;
@@ -45,40 +72,58 @@ const registerUser = async (userData) => {
     throw new Error('A senha é inválida ou muito curta (mínimo 6 caracteres).');
   }
 
-  const existingUser = await User.findOne({ where: { email } });
+  const existingUser = await User.scope('withPassword').findOne({ where: { email } });
   if (existingUser) {
     throw new Error('Este e-mail já está em uso.');
   }
 
+  const passwordHash = await bcrypt.hash(password, 10);
+  console.log(`[AUTH-REGISTER-DEBUG] Hash da senha gerado para o e-mail ${email}.`);
+  
+  if (!passwordHash) {
+      throw new Error("Falha crítica ao gerar o hash da senha.");
+  }
+
+  const transaction = await sequelize.transaction();
   try {
-    const passwordHash = await bcrypt.hash(password, 10);
-    console.log(`[DEBUG] Gerando hash para o usuário ${email}:`, passwordHash); // <-- LOG DE DEBUG
-
-    // Criação do Tenant primeiro, fora da transação
     let slug = generateSlug(`${name}'s Organization`);
-    const newTenant = await Tenant.create({ name: `${name}'s Organization`, slug });
+    const newTenant = await Tenant.create({ name: `${name}'s Organization`, slug }, { transaction });
 
-    // Agora, a criação do usuário
-    const newUser = await User.create({
+    const newUserPayload = {
       name,
       email,
-      passwordHash, // Passando o hash
+      passwordHash,
       cpf,
       phoneWhatsE164: phone,
       tenantId: newTenant.id,
-    });
+    };
     
-    console.log('[DEBUG] Objeto newUser criado:', newUser.toJSON()); // <-- LOG DE DEBUG
+    console.log('[AUTH-REGISTER-DEBUG] Payload enviado para User.create:', newUserPayload);
+    const newUser = await User.create(newUserPayload, { transaction });
+    
+    const createdUserWithPassword = await User.scope('withPassword').findByPk(newUser.id, { transaction });
 
-    const { accessToken, refreshToken } = generateTokens(newUser);
-    await saveSession(newUser.id, refreshToken);
+    if (!createdUserWithPassword || !createdUserWithPassword.passwordHash) {
+      console.error(`[ERRO CRÍTICO] Usuário ${email} foi criado, mas o passwordHash está NULO no banco!`);
+      throw new Error("Falha ao salvar a senha do usuário durante o registro.");
+    }
+    console.log(`[AUTH-REGISTER-DEBUG] Sucesso! Hash para ${email} foi confirmado no banco.`);
+
+    await transaction.commit();
+
+    const { accessToken, refreshToken } = generateTokens(createdUserWithPassword);
+    await saveSession(createdUserWithPassword.id, refreshToken);
     
-    const userToReturn = newUser.toJSON();
+    const userToReturn = createdUserWithPassword.toJSON();
     delete userToReturn.passwordHash;
 
     return { accessToken, refreshToken, user: userToReturn };
   } catch (error) {
-    console.error("ERRO DETALHADO NO REGISTRO:", error);
+    await transaction.rollback();
+    console.error("ERRO DETALHADO NA TRANSAÇÃO DE REGISTRO:", error);
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      throw new Error('Não foi possível criar a conta. O CPF ou e-mail já está em uso.');
+    }
     throw error;
   }
 };
@@ -87,27 +132,31 @@ const registerUser = async (userData) => {
  * Autentica um usuário com e-mail e senha.
  */
 const loginUser = async (email, password) => {
-  // Validação reforçada para a senha
   if (!password || typeof password !== 'string') {
     throw new Error('Credenciais inválidas.');
   }
 
-  const user = await User.findOne({ where: { email } });
+  const user = await User.scope('withPassword').findOne({ where: { email } });
   
   if (!user || !user.passwordHash) {
+    console.log(`[AUTH-LOGIN-DEBUG] Tentativa de login para ${email}: Usuário não encontrado ou sem hash de senha.`);
     throw new Error('Credenciais inválidas.');
   }
 
   const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+  
   if (!isPasswordValid) {
+    console.log(`[AUTH-LOGIN-DEBUG] Tentativa de login para ${email}: Senha incorreta.`);
     throw new Error('Credenciais inválidas.');
   }
-
+  
+  console.log(`[AUTH-LOGIN-DEBUG] Login bem-sucedido para ${email}.`);
   const { accessToken, refreshToken } = generateTokens(user);
   await saveSession(user.id, refreshToken);
 
   const userToReturn = user.toJSON();
   delete userToReturn.passwordHash;
+  
   return { accessToken, refreshToken, user: userToReturn };
 };
 
@@ -122,7 +171,8 @@ const handleRefreshToken = async (refreshTokenFromRequest) => {
     
     let sessionRecord = null;
     for (const session of sessions) {
-        if (await bcrypt.compare(refreshTokenFromRequest, session.refreshTokenHash)) {
+        const isMatch = await bcrypt.compare(refreshTokenFromRequest, session.refreshTokenHash);
+        if (isMatch) {
             sessionRecord = session;
             break;
         }
@@ -142,12 +192,13 @@ const handleRefreshToken = async (refreshTokenFromRequest) => {
 };
 
 /**
- * Realiza o logout invalidando o refresh token.
+ * Realiza o logout invalidando o refresh token específico no banco de dados.
  */
 const handleLogout = async (refreshTokenFromRequest, user) => {
   const sessions = await Session.findAll({ where: { userId: user.id } });
   for (const session of sessions) {
-      if (await bcrypt.compare(refreshTokenFromRequest, session.refreshTokenHash)) {
+      const isMatch = await bcrypt.compare(refreshTokenFromRequest, session.refreshTokenHash);
+      if (isMatch) {
           await session.destroy();
           return;
       }
