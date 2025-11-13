@@ -4,7 +4,9 @@
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { Document, AuditLog, Signer, ShareToken, sequelize } = require('../../models');
+const { Op } = require('sequelize'); // Importa os Operadores do Sequelize
+const { Document, AuditLog, Signer, ShareToken, User, sequelize } = require('../../models');
+// --- FIM DA CORREÇÃO ---
 const notificationService = require('../../services/notification.service'); // Importa o serviço real de notificações
 
 
@@ -287,31 +289,31 @@ const changeDocumentStatus = async (docId, newStatus, user) => {
 
 const findAllDocuments = async (user, status) => {
     const whereClause = {
-        ownerId: user.id, // Garante que só os documentos do usuário logado sejam retornados
+        ownerId: user.id,
     };
 
-    if (status) {
-        // Mapeia os status do frontend para os status do backend
-        const statusMap = {
-            pendentes: ['READY', 'PARTIALLY_SIGNED'],
-            concluidos: ['SIGNED'],
-            lixeira: ['CANCELLED'], // Supondo que lixeira = cancelado
-        };
-        
-        if (statusMap[status]) {
-            whereClause.status = { [sequelize.Op.in]: statusMap[status] };
-        }
+    const statusMap = {
+        pendentes: ['READY', 'PARTIALLY_SIGNED'],
+        concluidos: ['SIGNED'],
+        lixeira: ['CANCELLED', 'EXPIRED'],
+    };
+    
+    // Se um status de filtro foi fornecido e existe no nosso mapa
+    if (status && statusMap[status]) {
+        // Usa o operador 'Op.in' para buscar documentos com qualquer um dos status no array
+        whereClause.status = { [Op.in]: statusMap[status] };
     } else {
-        // Se nenhum status for fornecido (ex: aba "Todos"), exclui os da lixeira
-        whereClause.status = { [sequelize.Op.notIn]: ['CANCELLED'] };
+        // Se o filtro for 'todos' ou inválido, retorna tudo, exceto o que está na lixeira
+        whereClause.status = { [Op.notIn]: ['CANCELLED'] };
     }
 
     return Document.findAll({
         where: whereClause,
         order: [['createdAt', 'DESC']],
+        // Opcional: incluir signatários para ter mais dados na lista, se necessário
+        // include: [{ model: Signer, as: 'Signers'}]
     });
 };
-
 module.exports = {
   createAuditLog,
   createDocumentAndHandleUpload,
