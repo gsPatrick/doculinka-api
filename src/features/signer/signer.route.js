@@ -30,4 +30,7 @@ router.post('/:token/draw', signerController.confirmSignatureArt);
 // POST /sign/:token/commit -> realiza a assinatura (gera signatureHash, atualiza Signer)
 router.post('/:token/commit', signerController.commitSignature);
 
+router.post('/:token/position', signerController.savePosition);
+
+
 module.exports = router;

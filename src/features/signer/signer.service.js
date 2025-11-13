@@ -210,6 +210,13 @@ const commitSignature = async (document, signer, clientFingerprint, signatureIma
     }
 };
 
+const saveSignaturePosition = async (signer, position) => {
+  signer.signaturePositionX = position.x;
+  signer.signaturePositionY = position.y;
+  signer.signaturePositionPage = position.page;
+  await signer.save();
+};
+
 
 module.exports = {
   getSignerSummary,
@@ -217,4 +224,5 @@ module.exports = {
   startOtpVerification,
   verifyOtp,
   commitSignature,
+  saveSignaturePosition
 };

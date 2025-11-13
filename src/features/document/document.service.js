@@ -7,6 +7,31 @@ const crypto = require('crypto');
 const { Document, AuditLog, Signer, ShareToken, sequelize } = require('../../models');
 const notificationService = require('../../services/notification.service'); // Importa o serviço real de notificações
 
+
+// --- INÍCIO DA CORREÇÃO ---
+// Definição da função que estava faltando
+/**
+ * Salva a imagem da assinatura (em Base64) como um arquivo PNG no disco.
+ * @param {string} base64Image - A string Base64 da imagem PNG.
+ * @param {string} tenantId - O ID do tenant para organizar os arquivos.
+ * @param {string} signerId - O ID do signatário para nomear o arquivo.
+ * @returns {Promise<string>} O caminho relativo do arquivo salvo.
+ */
+const saveSignatureImage = async (base64Image, tenantId, signerId) => {
+  // Remove o prefixo da string Base64 (ex: "data:image/png;base64,")
+  const base64Data = base64Image.replace(/^data:image\/png;base64,/, "");
+  const imageBuffer = Buffer.from(base64Data, 'base64');
+  
+  const dir = path.join(__dirname, '..', '..', '..', 'uploads', tenantId, 'signatures');
+  await fs.mkdir(dir, { recursive: true });
+  
+  const filePath = path.join(dir, `${signerId}.png`);
+  await fs.writeFile(filePath, imageBuffer);
+  
+  // Retorna o caminho RELATIVO para ser salvo no banco de dados
+  return path.relative(path.join(__dirname, '..', '..', '..'), filePath);
+};
+
 /**
  * Função central e reutilizável para criar e encadear os logs de auditoria (hash-chain).
  * @param {object} logData - Dados do evento de log.

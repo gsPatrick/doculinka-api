@@ -72,6 +72,19 @@ const commitSignature = async (req, res, next) => {
   }
 };
 
+const savePosition = async (req, res, next) => {
+  try {
+    const { position } = req.body;
+    if (!position || position.x == null || position.y == null || position.page == null) {
+      return res.status(400).json({ message: 'Dados de posição (x, y, page) são obrigatórios.' });
+    }
+    await signerService.saveSignaturePosition(req.signer, position);
+    res.status(200).json({ message: 'Posição da assinatura salva com sucesso.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 module.exports = {
   getSummary,
@@ -80,4 +93,5 @@ module.exports = {
   verifyOtp,
   confirmSignatureArt,
   commitSignature,
+  savePosition
 };
