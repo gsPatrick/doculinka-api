@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const { Document, Signer, OtpCode, AuditLog, Certificate, sequelize } = require('../../models');
 const notificationService = require('../../services/notification.service');
 const { createAuditLog } = require('../document/document.service'); // Reutilizando a função de auditoria
+const documentService = require('../document/document.service'); // <-- IMPORTAR o documentService
 
 /**
  * Obtém o resumo do documento para o signatário e registra o evento de visualização.
@@ -14,13 +15,12 @@ const { createAuditLog } = require('../document/document.service'); // Reutiliza
  * @returns {object} Um resumo com dados do documento e do signatário.
  */
 const getSignerSummary = async (document, signer, req) => {
-  // Se for a primeira vez que o signatário visualiza, muda o status e loga.
-  // Isso previne a criação de múltiplos logs de 'VIEWED'.
+  // Se for a primeira vez que o signatário acessa (status PENDING),
+  // atualiza o status para VIEWED e cria um log de auditoria.
   if (signer.status === 'PENDING') {
     signer.status = 'VIEWED';
     await signer.save();
 
-    // Log de auditoria para o evento de visualização
     await createAuditLog({
       tenantId: document.tenantId,
       actorKind: 'SIGNER',
@@ -33,16 +33,30 @@ const getSignerSummary = async (document, signer, req) => {
     });
   }
 
+  // Busca o usuário "dono" do documento.
+  // Isso é necessário para chamar a função de geração de URL, que valida o acesso pelo dono.
+  const owner = await User.findByPk(document.ownerId);
+  if (!owner) {
+    // Lança um erro se, por alguma inconsistência de dados, o dono não for encontrado.
+    throw new Error("Proprietário do documento não foi encontrado. Não é possível gerar a URL do documento.");
+  }
+  
+  // Chama a função do documentService para obter a URL pública do documento.
+  const { url: documentUrl } = await documentService.getDocumentDownloadUrl(document.id, owner);
+  
+  // Monta e retorna o objeto de resposta final para o frontend.
   return {
     document: {
+      id: document.id, // Inclui o ID para referência, se necessário
       title: document.title,
       createdAt: document.createdAt,
       deadlineAt: document.deadlineAt,
+      url: documentUrl, // Inclui a URL do documento diretamente na resposta
     },
     signer: {
       name: signer.name,
       email: signer.email,
-      phoneWhatsE164: signer.phoneWhatsE164, // Envia para o front poder exibir
+      phoneWhatsE164: signer.phoneWhatsE164, // Inclui o telefone
       status: signer.status,
     }
   };

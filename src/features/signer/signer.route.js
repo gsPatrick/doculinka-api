@@ -31,7 +31,6 @@ router.post('/:token/draw', signerController.confirmSignatureArt);
 router.post('/:token/commit', signerController.commitSignature);
 
 router.post('/:token/position', signerController.savePosition);
-router.get('/:token/document-url', signerController.getDocumentUrl);
 
 
 module.exports = router;
