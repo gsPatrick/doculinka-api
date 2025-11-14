@@ -6,7 +6,7 @@ const { Resend } = require('resend');
 
 // --- Configuração dos Clientes de API ---
 
-// 1. Cliente Resend
+// 1. Cliente Resend (para e-mails)
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // 2. Cliente Axios para a Z-API (com Client-Token)
@@ -14,15 +14,18 @@ const zapiClient = axios.create({
   baseURL: `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`,
   headers: {
     'Content-Type': 'application/json',
-    // --- CORREÇÃO: REATIVAÇÃO DO CLIENT-TOKEN ---
-    // Este cabeçalho é obrigatório para a sua conta na Z-API.
-    // Ele buscará o valor da variável ZAPI_CLIENT_TOKEN no seu arquivo .env.
     'Client-Token': process.env.ZAPI_CLIENT_TOKEN
   }
 });
 
 
 // --- Funções Auxiliares ---
+
+/**
+ * Formata um número de telefone para o padrão E.164 (DDI+DDD+Número).
+ * @param {string} phone - O número de telefone com máscara (ex: "(71) 98314-1335").
+ * @returns {string} - O número formatado (ex: "5571983141335").
+ */
 const formatPhoneNumber = (phone) => {
   if (!phone) return null;
   const digitsOnly = phone.replace(/\D/g, '');
@@ -35,9 +38,16 @@ const formatPhoneNumber = (phone) => {
 
 // --- Funções de Envio Reais ---
 
+/**
+ * Envia um e-mail usando a API do Resend.
+ */
 const sendEmail = async ({ to, subject, html }) => {
   try {
     const from = process.env.RESEND_FROM_EMAIL;
+    if (!from) {
+        console.error('[Resend] Variável de ambiente RESEND_FROM_EMAIL não configurada.');
+        return;
+    }
     await resend.emails.send({ from, to, subject, html });
     console.log(`[Resend] E-mail enviado com sucesso para: ${to}`);
   } catch (error) {
@@ -45,6 +55,9 @@ const sendEmail = async ({ to, subject, html }) => {
   }
 };
 
+/**
+ * Envia uma mensagem de texto via WhatsApp usando a Z-API.
+ */
 const sendWhatsAppText = async ({ phone, message }) => {
   const formattedPhone = formatPhoneNumber(phone);
   if (!formattedPhone) {
@@ -65,27 +78,49 @@ const sendWhatsAppText = async ({ phone, message }) => {
 };
 
 
-// --- Funções de Negócio ---
+// --- Funções de Negócio (Exportadas) ---
 
-const sendSignInvite = async (signer, token) => {
+/**
+ * Envia o convite de assinatura, respeitando os canais de autenticação definidos.
+ * @param {object} signer - O objeto do signatário (com a propriedade 'authChannels').
+ * @param {string} token - O token de acesso para o link de assinatura.
+ * @param {string} [customMessage] - A mensagem personalizada opcional.
+ */
+const sendSignInvite = async (signer, token, customMessage) => {
   const inviteLink = `${process.env.FRONT_URL}/sign/${token}`;
   
-  if (signer.email) {
-    await sendEmail({
-      to: signer.email,
-      subject: 'Você foi convidado para assinar um documento',
-      html: `Olá ${signer.name},<br><br>Por favor, acesse o link abaixo para visualizar e assinar o documento:<br><a href="${inviteLink}">${inviteLink}</a>`
-    });
-  }
+  const defaultMessageText = `Olá ${signer.name}, você foi convidado para assinar um documento no Doculink.\n\nAcesse o link: ${inviteLink}`;
+  const defaultMessageHtml = `Olá ${signer.name},<br><br>Você foi convidado para assinar um documento. Acesse o link:<br><a href="${inviteLink}">${inviteLink}</a>`;
 
-  if (signer.phoneWhatsE164) {
-    await sendWhatsAppText({
-      phone: signer.phoneWhatsE164,
-      message: `Olá ${signer.name}, você foi convidado para assinar um documento no Doculink. Acesse o link: ${inviteLink}`
-    });
+  const messageText = customMessage ? `${customMessage}\n\nAcesse o link para assinar:\n${inviteLink}` : defaultMessageText;
+  const messageHtml = customMessage ? `${customMessage.replace(/\n/g, '<br>')}<br><br>Acesse o link para assinar:<br><a href="${inviteLink}">${inviteLink}</a>` : defaultMessageHtml;
+  
+  const channels = Array.isArray(signer.authChannels) ? signer.authChannels : [];
+  
+  console.log(`[Notification] Enviando convite para ${signer.email} pelos canais: ${channels.join(', ')}`);
+
+  // Itera sobre os canais definidos e envia para cada um
+  for (const channel of channels) {
+    if (channel === 'EMAIL' && signer.email) {
+      await sendEmail({
+        to: signer.email,
+        subject: 'Convite para assinatura de documento',
+        html: messageHtml,
+      });
+    }
+    
+    if (channel === 'WHATSAPP' && signer.phoneWhatsE164) {
+      await sendWhatsAppText({
+        phone: signer.phoneWhatsE164,
+        message: messageText,
+      });
+    }
   }
 };
 
+/**
+ * Envia o código OTP para o canal especificado.
+ */
 const sendOtp = async (recipient, channel, otp) => {
   if (channel === 'EMAIL') {
     await sendEmail({
@@ -102,7 +137,6 @@ const sendOtp = async (recipient, channel, otp) => {
     });
   }
 };
-
 
 module.exports = {
   sendSignInvite,

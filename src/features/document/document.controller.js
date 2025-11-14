@@ -61,11 +61,22 @@ const downloadDocumentFile = async (req, res, next) => {
 const inviteSigners = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { signers } = req.body; // Espera um array de objetos de signatários
+    
+    // --- MUDANÇA AQUI ---
+    // Extrai tanto a lista de 'signers' quanto a 'message' opcional do corpo da requisição
+    const { signers, message } = req.body;
+    // -------------------
+
+    // Validação de entrada
     if (!Array.isArray(signers) || signers.length === 0) {
       return res.status(400).json({ message: 'A lista de signatários é obrigatória.' });
     }
-    await documentService.addSignersToDocument(id, signers, req.user);
+
+    // --- MUDANÇA AQUI ---
+    // Passa a 'message' como um novo argumento para a função do serviço
+    await documentService.addSignersToDocument(id, signers, message, req.user);
+    // -------------------
+    
     return res.status(200).json({ message: 'Convites enviados com sucesso.' });
   } catch (error) {
     next(error);

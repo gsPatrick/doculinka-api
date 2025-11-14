@@ -136,7 +136,7 @@ const findDocumentById = async (docId, user) => {
  */
 const updateDocumentDetails = async (docId, updates, user) => {
     const document = await findDocumentById(docId, user);
-    const allowedUpdates = ['title', 'deadlineAt'];
+    const allowedUpdates = ['title', 'deadlineAt', 'autoReminders'];
     const validUpdates = {};
     for (const key of allowedUpdates) {
         if (updates[key] !== undefined) {
@@ -183,14 +183,16 @@ const getDocumentDownloadUrl = async (docId, user) => {
 /**
  * Adiciona um ou mais signatários a um documento e dispara os convites de assinatura.
  */
-const addSignersToDocument = async (docId, signers, user) => {
+const addSignersToDocument = async (docId, signers, message, user) => {
   const transaction = await sequelize.transaction();
   try {
     const document = await Document.findOne({ where: { id: docId, tenantId: user.tenantId }, transaction });
-    if (!document) throw new Error('Documento não encontrado.');
+    if (!document) {
+      throw new Error('Documento não encontrado ou acesso negado.');
+    }
 
     for (const signerData of signers) {
-      // Cria o registro do signatário no banco com todos os dados do frontend.
+      // Cria o registro do signatário no banco
       const signer = await Signer.create({
         documentId: docId,
         name: signerData.name,
@@ -202,12 +204,11 @@ const addSignersToDocument = async (docId, signers, user) => {
         order: signerData.order || 0
       }, { transaction });
 
-      // Gera um token de acesso único para o link de assinatura.
+      // Gera um token de acesso único para o link
       const token = crypto.randomBytes(32).toString('base64url');
       const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
       const expiresAt = document.deadlineAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-      // Salva o HASH do token no banco de dados.
       await ShareToken.create({
         documentId: docId,
         signerId: signer.id,
@@ -215,7 +216,7 @@ const addSignersToDocument = async (docId, signers, user) => {
         expiresAt,
       }, { transaction });
 
-      // Registra o evento de convite na trilha de auditoria.
+      // Registra o evento de convite na trilha de auditoria
       await createAuditLog({
         tenantId: user.tenantId,
         actorKind: 'USER',
@@ -226,8 +227,10 @@ const addSignersToDocument = async (docId, signers, user) => {
         payload: { documentId: docId, recipient: signer.email }
       }, transaction);
       
-      // Chama o serviço de notificação para enviar o convite real (e-mail/WhatsApp).
-      await notificationService.sendSignInvite(signer, token);
+      // --- MUDANÇA AQUI ---
+      // Passa a 'message' para o serviço de notificação
+      await notificationService.sendSignInvite(signer, token, message);
+      // --------------------
     }
     
     await transaction.commit();

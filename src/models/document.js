@@ -27,6 +27,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       references: { model: 'Users', key: 'id' }
     },
+       autoReminders: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      allowNull: false,
+    },
     title: {
       type: DataTypes.STRING,
       allowNull: false

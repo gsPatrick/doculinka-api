@@ -1,69 +1,78 @@
-  // app.js
+// app.js
+'use strict';
 
-  // 1. Carrega as variáveis de ambiente do arquivo .env. ESSENCIAL que seja a primeira linha.
-  require('dotenv').config();
+// 1. Carrega as variáveis de ambiente do arquivo .env. Deve ser a primeira linha.
+require('dotenv').config();
 
-  // 2. Importação dos módulos necessários
-  const express = require('express');
-  const cors = require('cors');
-  const helmet = require('helmet');
-  const routes = require('./src/routes');
-  const db = require('./src/models'); // Importa a configuração do Sequelize (incluindo a conexão)
+// 2. Importação dos módulos
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
+const routes = require('./src/routes');
+const db = require('./src/models');
+const { startReminderJob } = require('./src/services/cron.service');
 
-  // 3. Inicialização da aplicação Express
-  const app = express();
-  const PORT = process.env.PORT || 3333;
+// 3. Inicialização do Express
+const app = express();
+const PORT = process.env.PORT || 3333;
 
-  // 4. Configuração dos Middlewares de Segurança e Parse
-  app.use(helmet());
-  app.use(cors({ origin: '*' }));
-  app.use(express.json());
+// 4. Configuração dos Middlewares
+app.use(helmet());
+app.use(cors({ origin: '*' })); // Para produção, restrinja a origem: `origin: process.env.FRONT_URL`
+app.use(express.json());
 
-  // 5. Configuração das Rotas da API
-  app.use('/api', routes);
+// 5. Servir Arquivos Estáticos
+// Permite que o frontend acesse diretamente os arquivos na pasta 'uploads' (documentos, assinaturas, etc.)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-  app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// 6. Rotas da API
+app.use('/api', routes);
 
-
-  // 6. Middleware para Tratamento de Erros
-  app.use((err, req, res, next) => {
-    console.error('---------------------------------');
-    console.error('Um erro não tratado ocorreu:');
-    console.error(err.stack);
-    console.error('---------------------------------');
-    res.status(500).json({
-      message: err.message || 'Ocorreu um erro interno no servidor.',
-    });
+// 7. Middleware de Tratamento de Erros
+app.use((err, req, res, next) => {
+  console.error('--- ERRO NÃO TRATADO ---');
+  console.error(err.stack);
+  console.error('--------------------------');
+  
+  const statusCode = err.statusCode || 500;
+  res.status(statusCode).json({
+    message: err.message || 'Ocorreu um erro interno no servidor.',
   });
+});
 
-  // 7. Sincronização com o Banco de Dados e Inicialização do Servidor
-  const startServer = async () => {
-    try {
-      console.log('Conectando ao banco de dados...');
-      await db.sequelize.authenticate();
-      console.log('Conexão com o banco de dados estabelecida com sucesso.');
+// 8. Sincronização e Inicialização do Servidor
+const startServer = async () => {
+  try {
+    console.log('Conectando ao banco de dados...');
+    await db.sequelize.authenticate();
+    console.log('✅ Conexão com o banco de dados estabelecida.');
 
-      // --- SINCRONIZAÇÃO DOS MODELOS ---
-      console.log('Sincronizando modelos com o banco de dados (FORCE TRUE)...');
-      await db.sequelize.sync({ force: true }); // <-- força recriação total das tabelas
-
-      console.warn('------------------------------------------------------------------');
-      console.warn('⚠️  Atenção: Banco de dados foi recriado com "force: true".');
-      console.warn('⚠️  Todas as tabelas e dados existentes foram apagados e recriados.');
-      console.warn('------------------------------------------------------------------');
-
-      // Inicia o servidor Express
-      app.listen(PORT, () => {
-        console.log(`🚀 Servidor rodando na porta ${PORT}`);
-        console.log(`🔗 Acessível em: http://localhost:${PORT}`);
-      });
-
-    } catch (error) {
-      console.error('❌ Falha ao iniciar o servidor:', error);
-      process.exit(1);
+    console.log('Sincronizando modelos...');
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    
+    // ATENÇÃO: { force: true } apaga todos os dados. Use apenas em desenvolvimento.
+    await db.sequelize.sync({ force: true }); 
+    
+    if (isDevelopment) {
+      console.warn('----------------------------------------------------');
+      console.warn('AVISO: DB sincronizado com "force: true" (tabelas recriadas).');
+      console.warn('----------------------------------------------------');
+    } else {
+      console.log('✅ Modelos sincronizados.');
     }
-  };
 
-  // Inicia o processo
-  startServer();
+    app.listen(PORT, () => {
+      console.log(`🚀 Servidor rodando na porta ${PORT}`);
+      
+      // Inicia os jobs agendados após o servidor estar no ar
+      startReminderJob();
+    });
+
+  } catch (error) {
+    console.error('❌ Falha ao iniciar o servidor:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
