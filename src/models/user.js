@@ -5,13 +5,7 @@ const { Model } = require('sequelize');
 
 module.exports = (sequelize, DataTypes) => {
   class User extends Model {
-    /**
-     * Helper method for defining associations.
-     * This method is not a part of Sequelize lifecycle.
-     * The `models/index` file will call this method automatically.
-     */
     static associate(models) {
-      // Define as associações aqui
       User.belongsTo(models.Tenant, { foreignKey: 'tenantId', as: 'tenant' });
       User.hasMany(models.Session, { foreignKey: 'userId' });
       User.hasMany(models.Document, { foreignKey: 'ownerId', as: 'ownedDocuments' });
@@ -39,6 +33,13 @@ module.exports = (sequelize, DataTypes) => {
       unique: true,
       validate: { isEmail: true }
     },
+    // --- NOVO CAMPO ---
+    role: {
+      type: DataTypes.ENUM('ADMIN', 'USER'),
+      defaultValue: 'USER',
+      allowNull: false
+    },
+    // ------------------
     cpf: {
       type: DataTypes.STRING,
       allowNull: true,
@@ -53,7 +54,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     status: {
-      type: DataTypes.STRING,
+      type: DataTypes.STRING, // ACTIVE, BLOCKED
       defaultValue: 'ACTIVE',
       allowNull: false
     }
@@ -61,22 +62,15 @@ module.exports = (sequelize, DataTypes) => {
     sequelize,
     modelName: 'User',
     timestamps: true,
-    updatedAt: false, // Não usamos o campo updatedAt neste modelo
-
-    // --- ESCOPOS PARA CONTROLE DE ATRIBUTOS ---
+    updatedAt: false,
     defaultScope: {
-      // Por padrão, SEMPRE exclui o hash da senha de qualquer busca (find, findOne, findAll, etc.)
-      // Isso é uma medida de segurança para evitar vazamento acidental do hash.
       attributes: { exclude: ['passwordHash'] }
     },
     scopes: {
-      // Um escopo nomeado que pode ser chamado explicitamente para incluir o passwordHash.
-      // Usaremos User.scope('withPassword')... quando precisarmos validar a senha.
       withPassword: {
         attributes: { include: ['passwordHash'] }
       }
     }
-    // ----------------------------------------
   });
   return User;
 };

@@ -4,14 +4,14 @@
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { Op } = require('sequelize'); // Importa os Operadores do Sequelize
-const { Document, AuditLog, Signer, ShareToken, User, sequelize } = require('../../models');
-// --- FIM DA CORREÇÃO ---
-const notificationService = require('../../services/notification.service'); // Importa o serviço real de notificações
+const { Op } = require('sequelize');
+const { Document, Signer, ShareToken, AuditLog, sequelize } = require('../../models');
 
+// Serviços externos
+const notificationService = require('../../services/notification.service');
+const auditService = require('../audit/audit.service'); // Usando o serviço centralizado
+const pdfService = require('../../services/pdf.service');
 
-// --- INÍCIO DA CORREÇÃO ---
-// Definição da função que estava faltando
 /**
  * Salva a imagem da assinatura (em Base64) como um arquivo PNG no disco.
  * @param {string} base64Image - A string Base64 da imagem PNG.
@@ -32,38 +32,6 @@ const saveSignatureImage = async (base64Image, tenantId, signerId) => {
   
   // Retorna o caminho RELATIVO para ser salvo no banco de dados
   return path.relative(path.join(__dirname, '..', '..', '..'), filePath);
-};
-
-/**
- * Função central e reutilizável para criar e encadear os logs de auditoria (hash-chain).
- * @param {object} logData - Dados do evento de log.
- * @param {import('sequelize').Transaction} transaction - A transação do Sequelize.
- * @returns {Promise<AuditLog>}
- */
-const createAuditLog = async (logData, transaction) => {
-  const { tenantId, actorKind, actorId, entityType, entityId, action, ip, userAgent, payload = {} } = logData;
-  
-  const lastEvent = await AuditLog.findOne({
-    where: { entityId },
-    order: [['createdAt', 'DESC']],
-    transaction
-  });
-
-  const prevEventHash = lastEvent ? lastEvent.eventHash : crypto.createHash('sha256').update('genesis_block_for_entity').digest('hex');
-
-  const payloadToHash = {
-    actorKind, actorId, entityType, entityId, action, ip, userAgent, ...payload
-  };
-  const payloadString = JSON.stringify(payloadToHash) + new Date().toISOString();
-
-  const eventHash = crypto.createHash('sha256').update(prevEventHash + payloadString).digest('hex');
-
-  return AuditLog.create({
-    tenantId, actorKind, actorId, entityType, entityId, action, ip, userAgent,
-    payloadJson: payload,
-    prevEventHash,
-    eventHash
-  }, { transaction });
 };
 
 /**
@@ -98,13 +66,16 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
     doc.status = 'READY';
     await doc.save({ transaction });
 
-    await createAuditLog({
+    // Log de Auditoria Centralizado
+    await auditService.createEntry({
       tenantId: user.tenantId,
       actorKind: 'USER',
       actorId: user.id,
       entityType: 'DOCUMENT',
       entityId: doc.id,
       action: 'STORAGE_UPLOADED',
+      ip: 'SYSTEM', // Pode ser melhorado passando req.ip do controller
+      userAgent: 'SYSTEM',
       payload: { fileName: file.originalname, sha256 }
     }, transaction);
 
@@ -148,7 +119,7 @@ const updateDocumentDetails = async (docId, updates, user) => {
 };
 
 /**
- * Obtém o caminho absoluto do arquivo no servidor para permitir o download.
+ * Obtém o caminho absoluto do arquivo no servidor para permitir o download interno ou processamento.
  */
 const getDocumentFilePath = async (docId, user) => {
     const document = await Document.findOne({
@@ -164,6 +135,9 @@ const getDocumentFilePath = async (docId, user) => {
     return { filePath: absolutePath, originalName };
 };
 
+/**
+ * Retorna a URL pública para download do documento.
+ */
 const getDocumentDownloadUrl = async (docId, user) => {
     // Valida o acesso ao documento
     const document = await Document.findOne({
@@ -207,6 +181,7 @@ const addSignersToDocument = async (docId, signers, message, user) => {
       // Gera um token de acesso único para o link
       const token = crypto.randomBytes(32).toString('base64url');
       const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      // Prazo padrão de 30 dias se o documento não tiver deadline
       const expiresAt = document.deadlineAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       await ShareToken.create({
@@ -217,20 +192,22 @@ const addSignersToDocument = async (docId, signers, message, user) => {
       }, { transaction });
 
       // Registra o evento de convite na trilha de auditoria
-      await createAuditLog({
+      await auditService.createEntry({
         tenantId: user.tenantId,
         actorKind: 'USER',
         actorId: user.id,
         entityType: 'SIGNER',
         entityId: signer.id,
         action: 'INVITED',
+        ip: 'SYSTEM', // Pode ser passado pelo controller
+        userAgent: 'SYSTEM',
         payload: { documentId: docId, recipient: signer.email }
       }, transaction);
       
-      // --- MUDANÇA AQUI ---
-      // Passa a 'message' para o serviço de notificação
-      await notificationService.sendSignInvite(signer, token, message);
-      // --------------------
+      // --- INTEGRAÇÃO WHITELABEL ---
+      // Passa o tenantId para que o serviço busque as chaves de API corretas (Z-API/Resend)
+      await notificationService.sendSignInvite(signer, token, message, document.tenantId);
+      // -----------------------------
     }
     
     await transaction.commit();
@@ -244,15 +221,19 @@ const addSignersToDocument = async (docId, signers, message, user) => {
  * Retorna a trilha de auditoria completa de um documento e seus signatários.
  */
 const findAuditTrail = async (docId, user) => {
-    await findDocumentById(docId, user); 
+    await findDocumentById(docId, user); // Valida acesso
     const signers = await Signer.findAll({ where: { documentId: docId }, attributes: ['id'] });
     const signerIds = signers.map(s => s.id);
 
+    // Busca logs formatados usando o auditService
+    // Nota: Se quiser a lista crua, use AuditLog.findAll. 
+    // Se quiser a formatada, use auditService.listLogs, mas precisaria adaptar os filtros lá.
+    // Aqui retornamos o modelo cru para o controller específico do documento, ou podemos adaptar.
     return AuditLog.findAll({
         where: {
-            [sequelize.Op.or]: [
+            [Op.or]: [
                 { entityType: 'DOCUMENT', entityId: docId },
-                { entityType: 'SIGNER', entityId: { [sequelize.Op.in]: signerIds } }
+                { entityType: 'SIGNER', entityId: { [Op.in]: signerIds } }
             ]
         },
         order: [['createdAt', 'ASC']]
@@ -271,13 +252,15 @@ const changeDocumentStatus = async (docId, newStatus, user) => {
     document.status = newStatus;
     await document.save({ transaction });
 
-    await createAuditLog({
+    await auditService.createEntry({
       tenantId: user.tenantId,
       actorKind: 'USER',
       actorId: user.id,
       entityType: 'DOCUMENT',
       entityId: docId,
       action: 'STATUS_CHANGED',
+      ip: 'SYSTEM',
+      userAgent: 'SYSTEM',
       payload: { newStatus }
     }, transaction);
 
@@ -288,7 +271,6 @@ const changeDocumentStatus = async (docId, newStatus, user) => {
     throw error;
   }
 };
-
 
 const findAllDocuments = async (user, status) => {
     const whereClause = {
@@ -301,33 +283,25 @@ const findAllDocuments = async (user, status) => {
         lixeira: ['CANCELLED', 'EXPIRED'],
     };
     
-    // Se um status de filtro foi fornecido e existe no nosso mapa
     if (status && statusMap[status]) {
-        // Usa o operador 'Op.in' para buscar documentos com qualquer um dos status no array
         whereClause.status = { [Op.in]: statusMap[status] };
     } else {
-        // Se o filtro for 'todos' ou inválido, retorna tudo, exceto o que está na lixeira
         whereClause.status = { [Op.notIn]: ['CANCELLED'] };
     }
 
     return Document.findAll({
         where: whereClause,
         order: [['createdAt', 'DESC']],
-        // Opcional: incluir signatários para ter mais dados na lista, se necessário
-        // include: [{ model: Signer, as: 'Signers'}]
+        include: [{ model: Signer, as: 'Signers'}]
     });
 };
 
 const getDocumentStats = async (user) => {
   const ownerId = user.id;
 
-  // Executa todas as contagens em paralelo para máxima eficiência
   const [pendingCount, signedCount, totalCount] = await Promise.all([
-    // Conta documentos pendentes (Prontos para assinar ou Parcialmente assinados)
     Document.count({ where: { ownerId, status: { [Op.in]: ['READY', 'PARTIALLY_SIGNED'] } } }),
-    // Conta documentos finalizados
     Document.count({ where: { ownerId, status: 'SIGNED' } }),
-    // Conta o total de documentos (excluindo os da lixeira)
     Document.count({ where: { ownerId, status: { [Op.notIn]: ['CANCELLED'] } } })
   ]);
 
@@ -335,21 +309,19 @@ const getDocumentStats = async (user) => {
     pending: pendingCount,
     signed: signedCount,
     total: totalCount,
-    // Você pode adicionar outras estatísticas aqui, como 'expired' ou 'cancelled'
   };
 };
 
 module.exports = {
-  createAuditLog,
+  saveSignatureImage,
   createDocumentAndHandleUpload,
   findDocumentById,
   updateDocumentDetails,
   getDocumentFilePath,
+  getDocumentDownloadUrl,
   addSignersToDocument,
   findAuditTrail,
   changeDocumentStatus,
-  getDocumentDownloadUrl,
   findAllDocuments,
-  getDocumentStats,
-  saveSignatureImage
+  getDocumentStats
 };

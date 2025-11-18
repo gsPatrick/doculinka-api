@@ -29,4 +29,46 @@ const changePassword = async (req, res, next) => {
   }
 };
 
-module.exports = { getMe, updateMe, changePassword};
+const listUsers = async (req, res, next) => {
+  try {
+    const users = await userService.listUsersByTenant(req.user.tenantId);
+    res.status(200).json(users);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const createUser = async (req, res, next) => {
+  try {
+    // Admin criando outro usuário
+    const newUser = await userService.createUserByAdmin(req.user, req.body);
+    res.status(201).json(newUser);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const adminUpdateUser = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const updated = await userService.updateUserByAdmin(req.user, id, req.body);
+    res.status(200).json(updated);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteUser = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    await userService.deleteUserByAdmin(req.user, id);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { 
+    getMe, updateMe, changePassword, // Existentes
+    listUsers, createUser, adminUpdateUser, deleteUser // Novos
+};
