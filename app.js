@@ -12,6 +12,7 @@ const path = require('path');
 const routes = require('./src/routes');
 const db = require('./src/models');
 const { startReminderJob } = require('./src/services/cron.service');
+const { seedDefaultAdmin } = require('./src/services/seed.service'); // <-- IMPORTADO AQUI
 
 // 3. Inicialização do Express
 const app = express();
@@ -51,8 +52,8 @@ const startServer = async () => {
     console.log('Sincronizando modelos...');
     const isDevelopment = process.env.NODE_ENV === 'development';
     
-    // ATENÇÃO: { force: true } apaga todos os dados. Use apenas em desenvolvimento.
-    await db.sequelize.sync({ force: true }); 
+    // ATENÇÃO: { force: true } apaga todos os dados. Usado apenas em desenvolvimento.
+    await db.sequelize.sync({ force: isDevelopment }); 
     
     if (isDevelopment) {
       console.warn('----------------------------------------------------');
@@ -61,6 +62,11 @@ const startServer = async () => {
     } else {
       console.log('✅ Modelos sincronizados.');
     }
+
+    // --- CRIA O ADMIN PADRÃO (SEED) ---
+    // A função verifica internamente se o admin já existe antes de criar.
+    await seedDefaultAdmin();
+    // ------------------------------------
 
     app.listen(PORT, () => {
       console.log(`🚀 Servidor rodando na porta ${PORT}`);
