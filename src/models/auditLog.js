@@ -1,3 +1,4 @@
+// src/models/auditLog.js
 'use strict';
 const { Model } = require('sequelize');
 
@@ -21,12 +22,16 @@ module.exports = (sequelize, DataTypes) => {
     },
     actorKind: DataTypes.ENUM('USER', 'SIGNER', 'SYSTEM'),
     actorId: DataTypes.UUID, // Polimórfico, pode ser de User ou Signer
-    entityType: DataTypes.ENUM('DOCUMENT', 'SIGNER', 'TOKEN', 'OTP', 'STORAGE'),
+    
+    // --- CORREÇÃO APLICADA AQUI ---
+    entityType: DataTypes.ENUM('DOCUMENT', 'SIGNER', 'TOKEN', 'OTP', 'STORAGE', 'SYSTEM'), // <-- ADICIONADO AQUI
+    
     entityId: DataTypes.UUID, // ID da entidade afetada
     action: DataTypes.ENUM(
       'CREATED', 'INVITED', 'VIEWED', 'OTP_SENT', 'OTP_VERIFIED',
       'SIGNED', 'EMAILED', 'DOWNLOADED', 'EXPIRED', 'CANCELLED',
-      'STATUS_CHANGED', 'STORAGE_UPLOADED', 'PADES_SIGNED', 'CERTIFICATE_ISSUED', 'OTP_FAILED'
+      'STATUS_CHANGED', 'STORAGE_UPLOADED', 'PADES_SIGNED', 'CERTIFICATE_ISSUED', 'OTP_FAILED',
+      'LOGIN_SUCCESS', 'LOGOUT', 'USER_CREATED', 'SETTINGS_CHANGED' // <-- Adicionei ações que faltavam também
     ),
     ip: DataTypes.STRING,
     userAgent: DataTypes.TEXT,
@@ -41,7 +46,7 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     sequelize,
     modelName: 'AuditLog',
-    timestamps: true, // createdAt é essencial aqui
+    timestamps: true,
     updatedAt: false
   });
   return AuditLog;
