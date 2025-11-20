@@ -22,7 +22,7 @@ const generateSlug = (name) => {
  * Gera tokens JWT.
  * @param {User} user - Objeto usuário.
  * @param {string} activeTenantId - O ID da organização que o usuário está acessando AGORA.
- * @param {string} activeRole - O papel do usuário NESTA organização (ADMIN/USER).
+ * @param {string} activeRole - O papel do usuário NESTA organização (ADMIN/USER/SUPER_ADMIN).
  */
 const generateTokens = (user, activeTenantId, activeRole) => {
   const accessToken = jwt.sign(
@@ -32,11 +32,11 @@ const generateTokens = (user, activeTenantId, activeRole) => {
       role: activeRole          // E a permissão naquele contexto
     },
     process.env.JWT_SECRET,
-    { expiresIn: '1h' } // Aumentei para 1h para facilitar uso
+    { expiresIn: '1h' } // Expiração do Access Token
   );
 
   const refreshToken = jwt.sign(
-    { userId: user.id, tenantId: activeTenantId }, // Refresh também amarrado ao contexto? Pode ser, ou global. Vamos amarrar.
+    { userId: user.id, tenantId: activeTenantId },
     process.env.JWT_REFRESH_SECRET,
     { expiresIn: '7d' }
   );
@@ -91,7 +91,7 @@ const registerUser = async (userData, { ip, userAgent } = {}) => {
       cpf,
       phoneWhatsE164: phone,
       tenantId: newTenant.id, // Tenant Pessoal
-      role: 'ADMIN',          // Dono é Admin do próprio tenant
+      role: 'ADMIN',          // Quem se cadastra é Admin do próprio tenant
       status: 'ACTIVE'
     }, { transaction });
     
@@ -138,9 +138,14 @@ const loginUser = async (email, password, { ip, userAgent }) => {
   if (!isMatch) throw new Error('Credenciais inválidas.');
   
   // Por padrão, loga no Tenant Pessoal
-  // O frontend depois pode chamar /me/tenants e /auth/switch-tenant
   const activeTenantId = user.tenantId;
-  const activeRole = 'ADMIN'; // Dono da própria conta
+  
+  // --- CORREÇÃO: Verifica se é SUPER_ADMIN ---
+  let activeRole = 'ADMIN';
+  if (user.role === 'SUPER_ADMIN') {
+    activeRole = 'SUPER_ADMIN';
+  }
+  // ------------------------------------------
 
   const { accessToken, refreshToken } = generateTokens(user, activeTenantId, activeRole);
   await saveSession(user.id, refreshToken);
@@ -176,7 +181,8 @@ const switchTenantContext = async (userId, targetTenantId, { ip, userAgent }) =>
   // 1. Verifica se é o Tenant Pessoal
   if (user.tenantId === targetTenantId) {
     authorized = true;
-    newRole = 'ADMIN'; // Dono é sempre admin do pessoal
+    // --- CORREÇÃO: Mantém role de SUPER_ADMIN se for o caso ---
+    newRole = (user.role === 'SUPER_ADMIN') ? 'SUPER_ADMIN' : 'ADMIN';
   } else {
     // 2. Verifica se é membro convidado
     const membership = await TenantMember.findOne({
@@ -247,7 +253,8 @@ const handleRefreshToken = async (refreshTokenFromRequest) => {
     // Precisamos descobrir o role neste tenant novamente
     let role = 'USER';
     if (currentTenantId === user.tenantId) {
-      role = 'ADMIN';
+      // --- CORREÇÃO: Mantém SUPER_ADMIN ---
+      role = (user.role === 'SUPER_ADMIN') ? 'SUPER_ADMIN' : 'ADMIN';
     } else {
       const mem = await TenantMember.findOne({ where: { userId: user.id, tenantId: currentTenantId }});
       if (mem) role = mem.role;
@@ -263,7 +270,6 @@ const handleRefreshToken = async (refreshTokenFromRequest) => {
 };
 
 const handleLogout = async (refreshToken, user) => {
-    // Implementação anterior mantida
     const sessions = await Session.findAll({ where: { userId: user.id } });
     for (const session of sessions) {
       if (await bcrypt.compare(refreshToken, session.refreshTokenHash)) {
@@ -277,5 +283,5 @@ module.exports = {
   loginUser,
   handleRefreshToken,
   handleLogout,
-  switchTenantContext // Nova função exportada
+  switchTenantContext
 };
