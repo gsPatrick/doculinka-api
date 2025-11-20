@@ -62,13 +62,24 @@ const confirmSignatureArt = async (req, res, next) => {
 
 const commitSignature = async (req, res, next) => {
   try {
-    const { clientFingerprint, signatureImage } = req.body; // Recebe a imagem
+    const { clientFingerprint, signatureImage } = req.body;
     if (!clientFingerprint || !signatureImage) {
-      return res.status(400).json({ message: 'Client fingerprint e imagem da assinatura são obrigatórios.' });
+      return res.status(400).json({ message: 'Dados incompletos.' });
     }
 
-    await signerService.commitSignature(req.document, req.signer, clientFingerprint, signatureImage, req);
-    res.status(200).json({ message: 'Documento assinado com sucesso!' });
+    // Agora capturamos o retorno do service
+    const result = await signerService.commitSignature(
+        req.document, 
+        req.signer, 
+        clientFingerprint, 
+        signatureImage, 
+        req
+    );
+    
+    res.status(200).json({ 
+        message: 'Assinado com sucesso!',
+        ...result // { shortCode, signatureHash, isComplete }
+    });
   } catch (error) {
     next(error);
   }
