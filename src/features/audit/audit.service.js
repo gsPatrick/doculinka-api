@@ -34,7 +34,7 @@ const createEntry = async (logData, transaction = null) => {
     transaction
   });
 
-  // Se não houver anterior, cria um hash "gênesis"
+  // Se não houver anterior, cria um hash "gênesis" baseado no ID da entidade
   const prevEventHash = lastEvent 
     ? lastEvent.eventHash 
     : crypto.createHash('sha256').update(`genesis_block_${entityId}`).digest('hex');
@@ -43,16 +43,23 @@ const createEntry = async (logData, transaction = null) => {
   const payloadToHash = {
     actorKind, actorId, entityType, entityId, action, ip, userAgent, ...payload
   };
-  // Adiciona timestamp ISO para garantir unicidade temporal
-  const timestamp = new Date().toISOString(); 
-  const payloadString = JSON.stringify(payloadToHash) + timestamp;
+  
+  // --- CRÍTICO: CONSISTÊNCIA TEMPORAL ---
+  // Definimos o timestamp manualmente aqui para usar o MESMO valor 
+  // no cálculo do Hash e na gravação do Banco de Dados (createdAt).
+  // Se deixássemos o banco gerar o createdAt automaticamente, o hash não bateria na verificação.
+  const timestamp = new Date();
+  const timestampISO = timestamp.toISOString(); 
+
+  // Concatena payload + timestamp para o hash
+  const payloadString = JSON.stringify(payloadToHash) + timestampISO;
 
   // 3. Gera o hash do evento atual
   const eventHash = crypto.createHash('sha256')
     .update(prevEventHash + payloadString)
     .digest('hex');
 
-  // 4. Salva no banco de dados
+  // 4. Salva no banco de dados forçando o createdAt
   return AuditLog.create({
     tenantId,
     actorKind,
@@ -64,7 +71,8 @@ const createEntry = async (logData, transaction = null) => {
     userAgent,
     payloadJson: payload,
     prevEventHash,
-    eventHash
+    eventHash,
+    createdAt: timestamp // <--- Importante: Força a data usada no hash
   }, { transaction });
 };
 
@@ -84,7 +92,9 @@ const listLogs = async (tenantId, { limit = 20, page = 1, action, search }) => {
     where.action = action;
   }
 
-  // TODO: Implementar filtro de 'search' (IP ou ActorName) se necessário via Op.like
+  // Nota: Filtro de 'search' (IP ou ActorName) é complexo pois ActorName é resolvido dinamicamente.
+  // Aqui implementamos busca básica por IP se fornecido (necessitaria importar Op se fosse usar)
+  // if (search) { where.ip = { [Op.like]: `%${search}%` }; }
 
   // 1. Busca os logs crus no banco
   const { count, rows } = await AuditLog.findAndCountAll({

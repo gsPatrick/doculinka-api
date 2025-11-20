@@ -145,6 +145,62 @@ const getStats = async (req, res, next) => {
   }
 };
 
+/**
+ * Recebe um arquivo PDF (buffer), calcula o hash e verifica se existe no banco.
+ */
+const validateFile = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
+    }
+
+    // O arquivo está em req.file.buffer porque usamos memoryStorage
+    const result = await documentService.validatePdfIntegrity(req.file.buffer);
+
+    if (result.valid) {
+      return res.status(200).json({
+        valid: true,
+        message: 'Documento original e válido.',
+        document: result.document
+      });
+    } else {
+      return res.status(404).json({ // Ou 400/200 com valid: false
+        valid: false,
+        message: 'Documento não encontrado ou modificado.',
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Recalcula a Hash Chain dos logs de auditoria para provar que não houve tampering no banco.
+ */
+const verifyChain = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const report = await documentService.verifyAuditLogChain(id);
+    
+    if (report.isValid) {
+      return res.status(200).json({ 
+        isValid: true, 
+        message: 'A integridade da trilha de auditoria está intacta.',
+        totalEvents: report.count 
+      });
+    } else {
+      // Isso é grave: significa que alguém mexeu no banco de dados manualmente
+      return res.status(409).json({ 
+        isValid: false, 
+        message: 'Falha na integridade da auditoria. Dados podem ter sido alterados.',
+        brokenAt: report.brokenEventId
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createDocument,
   getDocumentById,
@@ -156,5 +212,7 @@ module.exports = {
   expireDocument,
   applyPades,
   getAllDocuments,
-  getStats
+  getStats,
+  verifyChain,
+  validateFile
 };

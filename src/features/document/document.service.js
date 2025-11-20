@@ -5,12 +5,13 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { Op } = require('sequelize');
-const { Document, Signer, ShareToken, AuditLog, sequelize } = require('../../models');
+const { Document, Signer, ShareToken, AuditLog, Certificate, User, Tenant, sequelize } = require('../../models');
 
 // Serviços externos
 const notificationService = require('../../services/notification.service');
-const auditService = require('../audit/audit.service'); // Usando o serviço centralizado
+const auditService = require('../audit/audit.service');
 const pdfService = require('../../services/pdf.service');
+const padesService = require('../../services/pades.service');
 
 /**
  * Salva a imagem da assinatura (em Base64) como um arquivo PNG no disco.
@@ -148,7 +149,7 @@ const getDocumentDownloadUrl = async (docId, user) => {
     }
     
     // Constrói uma URL pública para o arquivo.
-    // Isso requer que a pasta 'uploads' seja servida estaticamente pelo Express.
+    // Isso requer que a pasta 'uploads' seja servida estaticamente pelo Express no app.js.
     const fileUrl = `${process.env.API_BASE_URL}/${document.storageKey}`;
     
     return { url: fileUrl };
@@ -225,10 +226,7 @@ const findAuditTrail = async (docId, user) => {
     const signers = await Signer.findAll({ where: { documentId: docId }, attributes: ['id'] });
     const signerIds = signers.map(s => s.id);
 
-    // Busca logs formatados usando o auditService
-    // Nota: Se quiser a lista crua, use AuditLog.findAll. 
-    // Se quiser a formatada, use auditService.listLogs, mas precisaria adaptar os filtros lá.
-    // Aqui retornamos o modelo cru para o controller específico do documento, ou podemos adaptar.
+    // Busca logs crus para análise técnica
     return AuditLog.findAll({
         where: {
             [Op.or]: [
@@ -272,6 +270,99 @@ const changeDocumentStatus = async (docId, newStatus, user) => {
   }
 };
 
+/**
+ * Aplica a assinatura digital PAdES (com certificado A1) ao documento.
+ * Esta função pode ser chamada explicitamente via rota administrativa ou
+ * automaticamente ao final do fluxo de assinaturas.
+ */
+const finalizeWithPades = async (docId, user) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const document = await Document.findOne({ 
+            where: { id: docId, tenantId: user.tenantId },
+            include: [{ model: Signer, as: 'Signers' }],
+            transaction 
+        });
+
+        if (!document) throw new Error('Documento não encontrado.');
+
+        // Verifica se o documento já foi finalizado
+        if (document.status === 'SIGNED') {
+            // Se já estiver assinado, retorna sem erro (idempotência)
+            await transaction.rollback();
+            return document;
+        }
+
+        const originalFilePath = path.join(__dirname, '..', '..', '..', document.storageKey);
+        const pdfBuffer = await fs.readFile(originalFilePath);
+
+        // Prepara os dados dos signatários para os carimbos visuais
+        const signersData = document.Signers.map(s => ({
+            name: s.name,
+            signedAt: s.signedAt,
+            artefactPath: s.signatureArtefactPath,
+            positionX: s.signaturePositionX,
+            positionY: s.signaturePositionY,
+            positionPage: s.signaturePositionPage
+        }));
+
+        // Aplica a assinatura PAdES + Carimbos Visuais
+        const signedPdfBuffer = await padesService.applyPadesSignatureWithStamps(pdfBuffer, signersData);
+
+        // Salva o novo arquivo
+        const signedFileStorageKey = document.storageKey.replace(/(\.[\w\d_-]+)$/i, '-pades-signed$1');
+        const signedFilePath = path.join(__dirname, '..', '..', '..', signedFileStorageKey);
+        await fs.writeFile(signedFilePath, signedPdfBuffer);
+
+        // Calcula novo Hash
+        const newSha256 = crypto.createHash('sha256').update(signedPdfBuffer).digest('hex');
+
+        // Atualiza documento
+        document.status = 'SIGNED';
+        document.storageKey = signedFileStorageKey;
+        document.sha256 = newSha256;
+        await document.save({ transaction });
+
+        // Registra Auditoria
+        await auditService.createEntry({
+            tenantId: user.tenantId,
+            actorKind: 'USER',
+            actorId: user.id,
+            entityType: 'DOCUMENT',
+            entityId: document.id,
+            action: 'PADES_SIGNED',
+            ip: 'SYSTEM',
+            userAgent: 'SYSTEM',
+            payload: { sha256: newSha256 }
+        }, transaction);
+
+        await auditService.createEntry({
+            tenantId: user.tenantId,
+            actorKind: 'SYSTEM',
+            entityType: 'DOCUMENT',
+            entityId: document.id,
+            action: 'CERTIFICATE_ISSUED',
+            payload: { message: 'Certificado PAdES gerado.' }
+        }, transaction);
+        
+        // Cria registro de Certificado (Simulado para manter compatibilidade com modelo)
+        // Em uma implementação real, o certificado de conclusão seria um PDF separado gerado aqui.
+        await Certificate.create({
+            documentId: document.id,
+            storageKey: signedFileStorageKey, // Aponta para o próprio doc assinado por enquanto
+            sha256: newSha256
+        }, { transaction });
+
+        await transaction.commit();
+        return document;
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error("Erro ao aplicar PAdES:", error);
+        throw error;
+    }
+};
+
 const findAllDocuments = async (user, status) => {
     const whereClause = {
         ownerId: user.id,
@@ -312,6 +403,118 @@ const getDocumentStats = async (user) => {
   };
 };
 
+// --- NOVAS FUNÇÕES DE VALIDAÇÃO E INTEGRIDADE ---
+
+/**
+ * Valida um Buffer de PDF contra os registros do banco de dados.
+ * Calcula o Hash do arquivo enviado e verifica se existe um match exato.
+ */
+const validatePdfIntegrity = async (fileBuffer) => {
+  // 1. Calcula o SHA-256 do arquivo recebido
+  const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+  // 2. Busca no banco
+  const doc = await Document.findOne({
+    where: { sha256: hash },
+    include: [
+      { 
+        model: User, 
+        as: 'owner', 
+        attributes: ['name', 'email'] // Mostra quem criou
+      },
+      {
+        model: Signer,
+        as: 'Signers',
+        attributes: ['name', 'email', 'status', 'signedAt'] // Mostra quem assinou
+      }
+    ]
+  });
+
+  if (!doc) {
+    return { valid: false };
+  }
+
+  return {
+    valid: true,
+    document: {
+      title: doc.title,
+      status: doc.status,
+      createdAt: doc.createdAt,
+      ownerName: doc.owner ? doc.owner.name : 'Desconhecido',
+      signers: doc.Signers
+    }
+  };
+};
+
+/**
+ * Verifica a integridade da corrente de logs (Blockchain-like verification).
+ * Recalcula o hash de cada evento com base nos dados e no hash anterior
+ * para garantir que o banco de dados não foi alterado manualmente.
+ */
+const verifyAuditLogChain = async (docId) => {
+  // 1. Busca todos os logs relacionados a este documento e seus signatários
+  const signers = await Signer.findAll({ where: { documentId: docId }, attributes: ['id'] });
+  const signerIds = signers.map(s => s.id);
+
+  // Busca logs crus ordenados por criação (cronologia é vital para hash chain)
+  const logs = await AuditLog.findAll({
+    where: {
+      [Op.or]: [
+        { entityType: 'DOCUMENT', entityId: docId },
+        { entityType: 'SIGNER', entityId: { [Op.in]: signerIds } }
+      ]
+    },
+    order: [['createdAt', 'ASC']]
+  });
+
+  if (logs.length === 0) {
+    return { isValid: true, count: 0 }; // Nada a verificar
+  }
+
+  // 2. Itera e recalcula
+  for (let i = 0; i < logs.length; i++) {
+    const currentLog = logs[i];
+    const previousLog = i > 0 ? logs[i - 1] : null;
+
+    // Verifica encadeamento (O 'prevEventHash' do atual deve ser igual ao 'eventHash' do anterior)
+    if (previousLog) {
+      if (currentLog.prevEventHash !== previousLog.eventHash) {
+        return { isValid: false, brokenEventId: currentLog.id, reason: 'Link Quebrado (Hash Anterior incorreto)' };
+      }
+    }
+
+    // Recalcula o Hash do Evento Atual
+    // Lógica deve ser IDÊNTICA à audit.service.js -> createEntry
+    const { 
+      actorKind, actorId, entityType, entityId, 
+      action, ip, userAgent, payloadJson, prevEventHash, createdAt 
+    } = currentLog;
+
+    const payloadToHash = {
+      actorKind, actorId, entityType, entityId, action, ip, userAgent, ...payloadJson
+    };
+    
+    // A data precisa estar em ISO String exato como foi salvo e usado no cálculo original.
+    const timestamp = new Date(createdAt).toISOString();
+
+    const payloadString = JSON.stringify(payloadToHash) + timestamp;
+
+    const calculatedHash = crypto.createHash('sha256')
+      .update(prevEventHash + payloadString)
+      .digest('hex');
+
+    if (calculatedHash !== currentLog.eventHash) {
+      console.error(`Falha de Integridade no Log ID ${currentLog.id}`);
+      console.error(`Armazenado: ${currentLog.eventHash}`);
+      console.error(`Calculado:  ${calculatedHash}`);
+      
+      return { isValid: false, brokenEventId: currentLog.id, reason: 'Conteúdo Alterado (Hash Mismatch)' };
+    }
+  }
+
+  return { isValid: true, count: logs.length };
+};
+
 module.exports = {
   saveSignatureImage,
   createDocumentAndHandleUpload,
@@ -322,6 +525,9 @@ module.exports = {
   addSignersToDocument,
   findAuditTrail,
   changeDocumentStatus,
+  finalizeWithPades,
   findAllDocuments,
-  getDocumentStats
+  getDocumentStats,
+  validatePdfIntegrity,
+  verifyAuditLogChain
 };

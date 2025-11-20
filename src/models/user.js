@@ -6,7 +6,12 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class User extends Model {
     static associate(models) {
-      User.belongsTo(models.Tenant, { foreignKey: 'tenantId', as: 'tenant' });
+      // Tenant "dono" (aquele que foi criado no cadastro)
+      User.belongsTo(models.Tenant, { foreignKey: 'tenantId', as: 'ownTenant' });
+      
+      // Tenants onde ele é membro (convidado)
+      User.hasMany(models.TenantMember, { foreignKey: 'userId', as: 'memberships' });
+      
       User.hasMany(models.Session, { foreignKey: 'userId' });
       User.hasMany(models.Document, { foreignKey: 'ownerId', as: 'ownedDocuments' });
     }
@@ -18,7 +23,7 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       allowNull: false
     },
-    tenantId: {
+    tenantId: { // Este continua sendo o Tenant "Pessoal/Principal" criado no registro
       type: DataTypes.UUID,
       allowNull: false,
       references: { model: 'Tenants', key: 'id' }
@@ -33,13 +38,12 @@ module.exports = (sequelize, DataTypes) => {
       unique: true,
       validate: { isEmail: true }
     },
-    // --- NOVO CAMPO ---
+    // O Role aqui define se ele é dono da conta dele, mas o role no TenantMember define o acesso nas contas de terceiros
     role: {
       type: DataTypes.ENUM('ADMIN', 'USER'),
-      defaultValue: 'USER',
+      defaultValue: 'ADMIN', // Quem cria a conta é admin dela mesma
       allowNull: false
     },
-    // ------------------
     cpf: {
       type: DataTypes.STRING,
       allowNull: true,

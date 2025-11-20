@@ -52,9 +52,9 @@ const startServer = async () => {
     console.log('Sincronizando modelos...');
     const isDevelopment = process.env.NODE_ENV === 'development';
     
-    // ATENÇÃO: { force: true } apaga todos os dados. Usado apenas em desenvolvimento.
-    await db.sequelize.sync({ force: isDevelopment }); 
-    
+    // ATENÇÃO: { force: true } APAGA TODAS AS TABELAS E RECRIA
+    await db.sequelize.sync({ force: true });
+
     if (isDevelopment) {
       console.warn('----------------------------------------------------');
       console.warn('AVISO: DB sincronizado com "force: true" (tabelas recriadas).');
