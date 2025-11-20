@@ -154,21 +154,11 @@ const validateFile = async (req, res, next) => {
       return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
     }
 
-    // O arquivo está em req.file.buffer porque usamos memoryStorage
     const result = await documentService.validatePdfIntegrity(req.file.buffer);
 
-    if (result.valid) {
-      return res.status(200).json({
-        valid: true,
-        message: 'Documento original e válido.',
-        document: result.document
-      });
-    } else {
-      return res.status(404).json({ // Ou 400/200 com valid: false
-        valid: false,
-        message: 'Documento não encontrado ou modificado.',
-      });
-    }
+    // Retornamos 200 sempre, o frontend decide como mostrar baseada na flag 'valid'
+    return res.status(200).json(result);
+
   } catch (error) {
     next(error);
   }
