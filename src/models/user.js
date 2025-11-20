@@ -34,13 +34,12 @@ module.exports = (sequelize, DataTypes) => {
       unique: true,
       validate: { isEmail: true }
     },
-    // --- GARANTA QUE SUPER_ADMIN ESTÁ AQUI ---
     role: {
+      // Adicionei SUPER_ADMIN aqui
       type: DataTypes.ENUM('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'VIEWER', 'USER'),
       defaultValue: 'USER', 
       allowNull: false
     },
-    // -----------------------------------------
     cpf: {
       type: DataTypes.STRING,
       allowNull: true,
@@ -64,6 +63,15 @@ module.exports = (sequelize, DataTypes) => {
     modelName: 'User',
     timestamps: true,
     updatedAt: false,
+    // --- DEFINIÇÃO DOS ESCOPOS (IMPORTANTE) ---
+    defaultScope: {
+      attributes: { exclude: ['passwordHash'] } // Por padrão, não retorna a senha
+    },
+    scopes: {
+      withPassword: {
+        attributes: { include: ['passwordHash'] } // Quando chamado, inclui a senha (para login)
+      }
+    }
   });
   return User;
 };
