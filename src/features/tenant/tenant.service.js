@@ -6,7 +6,7 @@ const notificationService = require('../../services/notification.service');
 const { Op } = require('sequelize');
 
 /**
- * Função auxiliar para gerar slugs amigáveis para URL.
+ * Gera um slug amigável para URL a partir do nome.
  */
 const generateSlug = (name) => {
   return name
@@ -18,25 +18,21 @@ const generateSlug = (name) => {
 };
 
 /**
- * Cria um novo Tenant e o usuário administrador inicial.
- * Usado no registro de nova conta.
- * @param {string} tenantName 
- * @param {object} adminUserData 
+ * Cria um novo Tenant e o primeiro usuário Admin (Super Admin ou Admin de Tenant).
  */
 const createTenantWithAdmin = async (tenantName, adminUserData) => {
   const transaction = await sequelize.transaction();
   try {
-    // 1. Gera e valida o slug
     let slug = generateSlug(tenantName);
     const existingTenant = await Tenant.findOne({ where: { slug }, transaction });
+    
     if (existingTenant) {
       slug = `${slug}-${Math.random().toString(36).substring(2, 7)}`;
     }
 
-    // 2. Busca o plano padrão (Básico) para atribuir inicialmente
+    // Atribui o plano Básico por padrão ao criar uma nova empresa
     const basicPlan = await Plan.findOne({ where: { slug: 'basico' }, transaction });
 
-    // 3. Cria o Tenant
     const tenant = await Tenant.create({
       name: tenantName,
       slug: slug,
@@ -44,19 +40,12 @@ const createTenantWithAdmin = async (tenantName, adminUserData) => {
       planId: basicPlan ? basicPlan.id : null
     }, { transaction });
 
-    // 4. Cria o Usuário Dono (Admin)
     await User.create({
       tenantId: tenant.id,
       name: adminUserData.name,
       email: adminUserData.email,
-      // Os outros campos (passwordHash, cpf, etc) devem ser passados no adminUserData ou tratados antes
-      // Mas assumindo que este método é chamado pelo auth.service, o User.create lá já lida com tudo.
-      // AQUI, apenas garantimos que o tenantId está correto.
-      // OBS: Normalmente o auth.service chama o User.create diretamente. 
-      // Se esta função for usada apenas para seeding ou admin super user, ok.
-      // Se for usada pelo fluxo de registro normal, o auth.service geralmente orquestra.
-      // Vamos manter simples: cria um user placeholder se não vier completo, 
-      // mas no fluxo real o auth.service faz o trabalho pesado.
+      // Quem cria o tenant é o ADMIN dele
+      role: 'ADMIN', 
       status: 'ACTIVE'
     }, { transaction });
 
@@ -65,14 +54,14 @@ const createTenantWithAdmin = async (tenantName, adminUserData) => {
   } catch (error) {
     await transaction.rollback();
     if (error.name === 'SequelizeUniqueConstraintError') {
-      throw new Error(`Conflito de dados ao criar organização.`);
+      throw new Error(`O e-mail '${adminUserData.email}' já está em uso.`);
     }
     throw error;
   }
 };
 
 /**
- * Lista todos os tenants (Uso interno/Super Admin).
+ * Lista todos os tenants (Apenas Super Admin).
  */
 const findAllTenants = async () => {
   return Tenant.findAll({
@@ -82,43 +71,39 @@ const findAllTenants = async () => {
 };
 
 /**
- * Busca detalhes de um tenant pelo ID, incluindo estatísticas de uso.
- * @param {string} id - ID do tenant.
+ * Busca um tenant por ID, incluindo dados do plano e estatísticas de uso.
  */
 const findTenantById = async (id) => {
   const tenant = await Tenant.findByPk(id, {
     include: [{ model: Plan, as: 'plan' }]
   });
-
+  
   if (!tenant) {
-    throw new Error('Organização não encontrada.');
+    throw new Error('Tenant não encontrado.');
   }
-
-  // Contagem de Uso
-  // Usuários = Donos (na tabela User) + Membros Ativos (na tabela TenantMember)
-  const ownerCount = await User.count({ where: { tenantId: id, status: { [Op.ne]: 'INACTIVE' } } });
-  const memberCount = await TenantMember.count({ where: { tenantId: id, status: 'ACTIVE' } });
-  const totalUsers = ownerCount + memberCount;
-
-  // Documentos
-  // Precisamos acessar o modelo Document via sequelize.models para evitar dependência circular se houver
-  const documentsCount = await sequelize.models.Document.count({ where: { tenantId: id } });
+  
+  // Contagem de Uso para Limites do Plano
+  const owners = await User.count({ where: { tenantId: id, status: 'ACTIVE' } });
+  const members = await TenantMember.count({ where: { tenantId: id, status: 'ACTIVE' } });
+  const docs = await sequelize.models.Document.count({ where: { tenantId: id } });
 
   const tenantData = tenant.toJSON();
   tenantData.usage = {
-    users: totalUsers,
-    documents: documentsCount
+    users: owners + members,
+    documents: docs
   };
-
+  
   return tenantData;
 };
 
 /**
- * Atualiza dados do Tenant.
+ * Atualiza dados do Tenant (Nome, Plano, Status).
  */
 const updateTenantById = async (id, updateData) => {
   const tenant = await Tenant.findByPk(id);
-  if (!tenant) throw new Error('Organização não encontrada.');
+  if (!tenant) {
+    throw new Error('Tenant não encontrado.');
+  }
 
   const allowedUpdates = ['name', 'status', 'planId'];
   const validUpdates = {};
@@ -140,43 +125,40 @@ const updateTenantById = async (id, updateData) => {
 // --- GESTÃO DE MEMBROS E CONVITES ---
 
 /**
- * Lista todos os Tenants que o usuário tem acesso (Próprio + Convidados).
- * Usado para a troca de perfil/contexto.
+ * Lista todos os tenants aos quais o usuário tem acesso (Conta Pessoal + Convites Aceitos).
+ * Usado para o "Switch Tenant".
  */
 const listMyTenants = async (userId) => {
-  // 1. Busca Tenant Pessoal (Onde ele é dono/criador)
+  // 1. Busca Tenant Pessoal (onde ele é o Dono/User principal)
   const user = await User.findByPk(userId, {
     include: [{ model: Tenant, as: 'ownTenant' }]
   });
 
-  // 2. Busca Tenants onde ele é membro convidado e ativo
+  // 2. Busca Tenants onde ele é membro convidado e aceitou (ACTIVE)
   const memberships = await TenantMember.findAll({
     where: { userId, status: 'ACTIVE' },
     include: [{ model: Tenant, as: 'tenant' }]
   });
 
+  // 3. Monta lista unificada
   const list = [];
   
-  // Adiciona Tenant Pessoal
   if (user.ownTenant) {
     list.push({
       id: user.ownTenant.id,
       name: user.ownTenant.name,
-      role: 'ADMIN', // Dono é sempre admin da sua conta
-      isPersonal: true,
-      slug: user.ownTenant.slug
+      role: 'ADMIN', // Dono é sempre Admin da sua conta pessoal
+      isPersonal: true
     });
   }
 
-  // Adiciona Tenants Convidados
   memberships.forEach(m => {
     if (m.tenant) {
       list.push({
         id: m.tenant.id,
         name: m.tenant.name,
-        role: m.role,
-        isPersonal: false,
-        slug: m.tenant.slug
+        role: m.role, // O papel que foi atribuído no convite (VIEWER, MANAGER, ADMIN)
+        isPersonal: false
       });
     }
   });
@@ -185,26 +167,31 @@ const listMyTenants = async (userId) => {
 };
 
 /**
- * Envia um convite para um email participar do Tenant atual.
- * Verifica limites do plano antes de enviar.
+ * Convida um usuário por e-mail para o Tenant atual.
  */
-const inviteMember = async (currentTenantId, email, role = 'USER') => {
+const inviteMember = async (currentTenantId, email, role = 'VIEWER') => {
   // 1. Verifica Limite do Plano
   const tenant = await Tenant.findByPk(currentTenantId, { include: [{ model: Plan, as: 'plan' }] });
   
   if (tenant.plan) {
-    const ownerCount = await User.count({ where: { tenantId: currentTenantId, status: { [Op.ne]: 'INACTIVE' } } });
-    const memberCount = await TenantMember.count({ where: { tenantId: currentTenantId, status: { [Op.ne]: 'DECLINED' } } }); // Conta pendentes também como "uso reservado"
+    // Conta donos + membros ativos + membros pendentes (reservam vaga)
+    const ownerCount = await User.count({ where: { tenantId: currentTenantId, status: 'ACTIVE' } });
+    const memberCount = await TenantMember.count({ 
+      where: { 
+        tenantId: currentTenantId, 
+        status: { [Op.ne]: 'DECLINED' } // Conta PENDING e ACTIVE
+      } 
+    });
     
     if ((ownerCount + memberCount) >= tenant.plan.userLimit) {
-      throw new Error(`Limite de usuários do plano "${tenant.plan.name}" atingido. Faça upgrade para convidar mais membros.`);
+      throw new Error(`Limite de usuários do plano atingido (${tenant.plan.userLimit}). Faça upgrade para adicionar mais.`);
     }
   }
 
   // 2. Verifica se o usuário já existe no sistema
   const existingUser = await User.findOne({ where: { email } });
 
-  // 3. Cria ou Atualiza o convite
+  // 3. Cria ou Atualiza o convite (TenantMember)
   const [member, created] = await TenantMember.findOrCreate({
     where: { tenantId: currentTenantId, email },
     defaults: {
@@ -216,88 +203,43 @@ const inviteMember = async (currentTenantId, email, role = 'USER') => {
 
   if (!created) {
     if (member.status === 'ACTIVE') {
-      throw new Error('Este usuário já é um membro ativo desta organização.');
+      throw new Error('Este usuário já é membro desta organização.');
     }
-    // Reativa convite se estava recusado ou atualiza dados se pendente
+    // Se estava rejeitado ou pendente, renova o convite
     member.status = 'PENDING';
     member.userId = existingUser ? existingUser.id : null;
     member.role = role;
     await member.save();
   }
 
-  // 4. Envia Notificação (Email)
-  // Se o usuário já existe, link para login/dashboard. Se não, link para registro.
+  // 4. Envia E-mail (Lógica de Negócio)
   const inviteLink = existingUser 
-    ? `${process.env.FRONT_URL}/dashboard` 
-    : `${process.env.FRONT_URL}/register?email=${email}`;
+    ? `${process.env.FRONT_URL}/onboarding` // Vai ver o modal de convite
+    : `${process.env.FRONT_URL}/register?email=${email}`; // Vai criar conta
+
+  // TODO: Chamar notificationService real aqui
+  console.log(`[Invite] Enviando convite para ${email}. Link: ${inviteLink}`);
   
-  // TODO: Integrar com template real de email
-  const messageHtml = `
-    <p>Você foi convidado para fazer parte da organização <strong>${tenant.name}</strong>.</p>
-    <p><a href="${inviteLink}">Clique aqui para aceitar o convite</a></p>
-  `;
-
-  try {
-    await notificationService.sendEmail(currentTenantId, { // Passa tenantId para usar config whitelabel se houver
-        to: email,
-        subject: `Convite para participar de ${tenant.name}`,
-        html: messageHtml
-    });
-  } catch (err) {
-    console.error(`[InviteService] Erro ao enviar email para ${email}:`, err);
-    // Não falha a requisição se o email falhar, mas avisa no log
-  }
-
   return member;
 };
 
 /**
- * Lista convites pendentes para o usuário logado.
- * Busca tanto pelo ID (se já vinculado) quanto pelo email.
+ * Lista convites pendentes RECEBIDOS pelo usuário (para aceitar/recusar).
  */
 const listPendingInvites = async (userId, userEmail) => {
-    return TenantMember.findAll({
-        where: {
-            [Op.or]: [
-                { userId: userId },
-                { email: userEmail }
-            ],
-            status: 'PENDING'
-        },
-        include: [{ model: Tenant, as: 'tenant' }]
-    });
+  return TenantMember.findAll({
+      where: {
+          // Busca por ID de usuário OU email (caso o ID não tenha sido vinculado no momento do convite)
+          [Op.or]: [{ userId }, { email: userEmail }],
+          status: 'PENDING'
+      },
+      include: [{ model: Tenant, as: 'tenant' }]
+  });
 };
 
 /**
- * Aceita ou recusa um convite.
+ * Lista convites pendentes ENVIADOS pela empresa (para o Admin gerenciar).
  */
-const respondToInvite = async (userId, inviteId, accept) => {
-    const invite = await TenantMember.findByPk(inviteId);
-    
-    if (!invite) {
-        throw new Error('Convite não encontrado.');
-    }
-    
-    // Validação de segurança: o convite pertence a quem está chamando?
-    if (invite.userId !== userId) {
-        const user = await User.findByPk(userId);
-        if (user.email !== invite.email) {
-            throw new Error('Você não tem permissão para responder a este convite.');
-        }
-        // Se o email bate mas o userId estava null, vincula agora
-        invite.userId = userId;
-    }
-
-    if (invite.status !== 'PENDING') {
-        throw new Error('Este convite já foi respondido anteriormente.');
-    }
-
-    invite.status = accept ? 'ACTIVE' : 'DECLINED';
-    await invite.save();
-    
-    return invite;
-};
-
 const listSentInvites = async (tenantId) => {
   return TenantMember.findAll({
     where: {
@@ -308,6 +250,32 @@ const listSentInvites = async (tenantId) => {
   });
 };
 
+/**
+ * O usuário responde a um convite (Aceitar ou Recusar).
+ */
+const respondToInvite = async (userId, inviteId, accept) => {
+  const invite = await TenantMember.findByPk(inviteId);
+  if (!invite) {
+    throw new Error('Convite não encontrado.');
+  }
+  
+  // Segurança: Garante que o convite é para este usuário
+  if (invite.userId !== userId) {
+      // Se o userId no convite for null, verificamos se o email bate com o do usuário
+      const user = await User.findByPk(userId);
+      if (user.email !== invite.email) {
+          throw new Error('Este convite não pertence a você.');
+      }
+      // Vincula o usuário ao convite agora
+      invite.userId = userId;
+  }
+
+  invite.status = accept ? 'ACTIVE' : 'DECLINED';
+  await invite.save();
+  
+  return invite;
+};
+
 module.exports = {
   createTenantWithAdmin,
   findAllTenants,
@@ -316,6 +284,6 @@ module.exports = {
   listMyTenants,
   inviteMember,
   listPendingInvites,
-  respondToInvite,
-  listSentInvites
+  listSentInvites,
+  respondToInvite
 };
