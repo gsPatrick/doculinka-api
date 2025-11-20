@@ -1,3 +1,6 @@
+// src/features/tenant/tenant.route.js
+'use strict';
+
 const { Router } = require('express');
 const tenantController = require('./tenant.controller');
 const authGuard = require('../../middlewares/authGuard');
@@ -6,23 +9,45 @@ const superAdminGuard = require('../../middlewares/superAdminGuard'); // Super A
 
 const router = Router();
 
-// --- ROTAS GLOBAIS (Super Admin) ---
-// Apenas o Super Admin pode ver todos os tenants do sistema ou criar tenants "raiz"
-router.post('/', authGuard, superAdminGuard, tenantController.createTenant); 
-router.get('/all', authGuard, superAdminGuard, tenantController.getAllTenants); 
-router.get('/:id', authGuard, superAdminGuard, tenantController.getTenantById);
-
-// --- ROTAS DE TENANT (Admin da Empresa) ---
+// 1. Proteção Básica: Todo acesso a tenants exige login
 router.use(authGuard);
 
-// Gerenciar equipe (Invite) - Requer ser Admin daquele tenant
-router.post('/invite', adminGuard, tenantController.inviteUser); 
+
+// --- ROTAS ESPECÍFICAS (DEVEM VIR PRIMEIRO) ---
+
+// Rotas de Usuário Comum (Troca de Contexto / Visualização)
+// "available" e "my" são palavras fixas, devem ser checadas antes de tentar interpretar como ID
+router.get('/available', tenantController.getAvailableTenants);
+router.get('/my', tenantController.getMyTenant);
+
+
+// Rotas de Convites (Usuário Comum - Recebidos)
+router.get('/invites/pending', tenantController.getInvites);
+router.post('/invites/:id/respond', tenantController.respondInvite);
+
+
+// Rotas de Admin do Tenant (Gestão de Equipe)
+router.post('/invite', adminGuard, tenantController.inviteUser);
 router.get('/invites/sent', adminGuard, tenantController.getSentInvites);
 
-// Funções básicas de usuário
-router.get('/my', tenantController.getMyTenant);
-router.get('/available', tenantController.getAvailableTenants);
-router.get('/invites/pending', tenantController.getInvites); // Meus convites recebidos
-router.post('/invites/:id/respond', tenantController.respondInvite);
+
+// --- ROTAS DO SUPER ADMIN ---
+
+// Listar todos (Rota específica)
+router.get('/all', superAdminGuard, tenantController.getAllTenants);
+
+// Criar Tenant (Root)
+router.post('/', superAdminGuard, tenantController.createTenant);
+
+
+// --- ROTAS DINÂMICAS (DEVEM VIR POR ÚLTIMO) ---
+
+// Buscar Tenant por ID (Super Admin)
+// Se esta rota estivesse no topo, ela capturaria "/available" como sendo um ID
+router.get('/:id', superAdminGuard, tenantController.getTenantById);
+
+// Atualizar Tenant (Super Admin)
+router.patch('/:id', superAdminGuard, tenantController.updateTenant);
+
 
 module.exports = router;
