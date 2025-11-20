@@ -8,8 +8,6 @@ module.exports = (sequelize, DataTypes) => {
       Tenant.hasMany(models.User, { foreignKey: 'tenantId', as: 'ownerUsers' });
       Tenant.hasMany(models.Document, { foreignKey: 'tenantId' });
       Tenant.belongsTo(models.Plan, { foreignKey: 'planId', as: 'plan' });
-      
-      // Nova associação com membros convidados
       Tenant.hasMany(models.TenantMember, { foreignKey: 'tenantId', as: 'members' });
     }
   }
@@ -38,6 +36,19 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       defaultValue: 'ACTIVE',
       allowNull: false
+    },
+    // --- CAMPOS NOVOS PARA ASAAS ---
+    asaasCustomerId: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    asaasSubscriptionId: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    subscriptionStatus: {
+        type: DataTypes.STRING, // ACTIVE, OVERDUE, CANCELED
+        defaultValue: 'ACTIVE'
     }
   }, {
     sequelize,

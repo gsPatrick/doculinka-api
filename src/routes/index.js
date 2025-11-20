@@ -1,4 +1,3 @@
-// src/routes/index.js
 'use strict';
 
 const { Router } = require('express');
@@ -13,12 +12,14 @@ const contactRoutes = require('../features/contact/contact.route');
 const settingsRoutes = require('../features/settings/settings.route');
 const auditRoutes = require('../features/audit/audit.route');
 
+// --- NOVAS IMPORTAÇÕES ---
+const subscriptionRoutes = require('../features/subscription/subscription.route');
+const webhookRoutes = require('../features/webhook/webhook.route');
+
 // 2. Inicialização do roteador principal
 const router = Router();
 
-// 3. Definição das rotas base para cada funcionalidade
-// O prefixo '/api' é adicionado no arquivo app.js, então aqui definimos o que vem depois.
-// Ex: A rota POST /register do auth.route.js se tornará POST /api/auth/register
+// 3. Definição das rotas
 router.use('/auth', authRoutes);
 router.use('/users', userRoutes);
 router.use('/tenants', tenantRoutes);
@@ -28,8 +29,10 @@ router.use('/contacts', contactRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/audit', auditRoutes);
 
-// 4. (Opcional, mas recomendado) Rota de Health Check
-// Uma rota simples para verificar se a API está no ar.
+// --- NOVAS ROTAS ---
+router.use('/subscription', subscriptionRoutes);
+router.use('/webhooks', webhookRoutes);
+
 router.get('/health', (req, res) => {
   res.status(200).json({
     status: 'API is running',
@@ -37,5 +40,4 @@ router.get('/health', (req, res) => {
   });
 });
 
-// 5. Exportação do roteador principal para ser usado no app.js
 module.exports = router;
