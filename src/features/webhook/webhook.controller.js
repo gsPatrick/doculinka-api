@@ -1,3 +1,4 @@
+// src/features/webhook/webhook.controller.js
 'use strict';
 
 const { Tenant, Plan } = require('../../models');
@@ -7,10 +8,18 @@ const handleAsaasWebhook = async (req, res, next) => {
         const { event, payment } = req.body;
         const token = req.headers['asaas-access-token']; // Asaas envia o token no header se configurado
 
-        // Segurança básica (verificar token definido no .env)
+        // Segurança básica
         if (process.env.ASAAS_WEBHOOK_TOKEN && token !== process.env.ASAAS_WEBHOOK_TOKEN) {
             return res.status(401).json({ message: 'Unauthorized Webhook' });
         }
+
+        // --- CORREÇÃO: Validação de Existência do Objeto Payment ---
+        // Se o evento não tiver um objeto 'payment', nós ignoramos (ex: SUBSCRIPTION_CREATED, CUSTOMER_UPDATED)
+        if (!payment) {
+            console.log(`[Webhook Asaas] Evento ignorado (sem dados de pagamento): ${event}`);
+            return res.status(200).json({ received: true });
+        }
+        // -----------------------------------------------------------
 
         console.log(`[Webhook Asaas] Evento: ${event} | Payment: ${payment.id}`);
 
