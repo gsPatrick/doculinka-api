@@ -5,7 +5,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { Op } = require('sequelize');
-const { Document, Signer, ShareToken, AuditLog, User, Certificate, sequelize } = require('../../models');
+const { Document, Signer, ShareToken, AuditLog, User, Certificate, Tenant, Plan, sequelize } = require('../../models'); 
 
 // Serviços externos
 const notificationService = require('../../services/notification.service');
@@ -38,10 +38,40 @@ const saveSignatureImage = async (base64Image, tenantId, signerId) => {
  * e cria o primeiro evento de auditoria.
  */
 const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) => {
+  // --- INÍCIO DA TRAVA DE LIMITE ---
+  
+  // 1. Busca dados do Tenant e do Plano atual
+  const tenant = await Tenant.findByPk(user.tenantId, {
+      include: [{ model: Plan, as: 'plan' }]
+  });
+
+  if (!tenant) throw new Error('Organização não encontrada.');
+
+  // 2. Verifica status da assinatura (se não for plano gratuito/básico)
+  // Se o plano for pago mas o status não for ACTIVE, bloqueia.
+  // (Assumindo que 'basico' é o free ou barato que não bloqueia por inadimplência imediata, 
+  // ou ajuste conforme sua regra de negócio. Aqui bloquearemos se estiver OVERDUE/CANCELED)
+  if (tenant.subscriptionStatus && ['OVERDUE', 'CANCELED'].includes(tenant.subscriptionStatus)) {
+      throw new Error('Sua assinatura está pendente ou cancelada. Regularize para criar novos documentos.');
+  }
+
+  // 3. Verifica quantidade atual vs Limite do Plano
+  if (tenant.plan) {
+      const currentCount = await Document.count({ where: { tenantId: user.tenantId } });
+      
+      if (currentCount >= tenant.plan.documentLimit) {
+          const error = new Error(`Limite de documentos atingido (${tenant.plan.documentLimit}). Faça upgrade do plano.`);
+          error.statusCode = 403; // Forbidden
+          throw error;
+      }
+  }
+  // --- FIM DA TRAVA DE LIMITE ---
+
   const transaction = await sequelize.transaction();
   try {
+    // ... (resto do código original da função createDocument...)
     const doc = await Document.create({
-      tenantId: user.tenantId, // Usa o contexto atual do usuário
+      tenantId: user.tenantId,
       ownerId: user.id,
       title: title || file.originalname,
       deadlineAt,
@@ -49,7 +79,8 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
       size: file.size,
       status: 'DRAFT',
     }, { transaction });
-
+    
+    // ... (lógica de mover arquivo e salvar hash) ...
     const permanentDir = path.join(__dirname, '..', '..', '..', 'uploads', user.tenantId);
     await fs.mkdir(permanentDir, { recursive: true });
     const fileExtension = path.extname(file.originalname);
@@ -65,7 +96,6 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
     doc.status = 'READY';
     await doc.save({ transaction });
 
-    // Log de Auditoria
     await auditService.createEntry({
       tenantId: user.tenantId,
       actorKind: 'USER',
@@ -82,8 +112,9 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
     return doc;
   } catch (error) {
     await transaction.rollback();
+    // Limpeza de arquivo temporário
     if (file && file.path) {
-      await fs.unlink(file.path).catch(err => console.error("Falha ao limpar arquivo temporário após erro:", err));
+        require('fs').unlink(file.path, (err) => { if(err) console.error(err); });
     }
     throw error;
   }

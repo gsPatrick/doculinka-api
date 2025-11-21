@@ -168,14 +168,28 @@ const listMyTenants = async (userId) => {
 
 /**
  * Convida um usuário por e-mail para o Tenant atual.
+ * Com travas de Limite de Plano e Status de Assinatura.
  */
 const inviteMember = async (currentTenantId, email, role = 'VIEWER') => {
-  // 1. Verifica Limite do Plano
+  // 1. Busca Tenant com Plano
   const tenant = await Tenant.findByPk(currentTenantId, { include: [{ model: Plan, as: 'plan' }] });
   
+  if (!tenant) throw new Error('Organização não encontrada.');
+
+  // --- TRAVA 1: STATUS DO PAGAMENTO ---
+  // Se o pagamento estiver atrasado ou cancelado, bloqueia novas ações administrativas
+  if (tenant.subscriptionStatus && ['OVERDUE', 'CANCELED'].includes(tenant.subscriptionStatus)) {
+      throw new Error('Sua assinatura está irregular. Regularize o pagamento para convidar novos membros.');
+  }
+
   if (tenant.plan) {
-    // Conta donos + membros ativos + membros pendentes (reservam vaga)
-    const ownerCount = await User.count({ where: { tenantId: currentTenantId, status: 'ACTIVE' } });
+    // --- TRAVA 2: LIMITE DE USUÁRIOS ---
+    // Conta donos (Users) + membros ativos/pendentes (TenantMembers)
+    // Membros pendentes contam no limite para evitar spam de convites ultrapassando o plano
+    const ownerCount = await User.count({ 
+        where: { tenantId: currentTenantId, status: 'ACTIVE' } 
+    });
+    
     const memberCount = await TenantMember.count({ 
       where: { 
         tenantId: currentTenantId, 
@@ -183,12 +197,14 @@ const inviteMember = async (currentTenantId, email, role = 'VIEWER') => {
       } 
     });
     
-    if ((ownerCount + memberCount) >= tenant.plan.userLimit) {
-      throw new Error(`Limite de usuários do plano atingido (${tenant.plan.userLimit}). Faça upgrade para adicionar mais.`);
+    const totalUsers = ownerCount + memberCount;
+
+    if (totalUsers >= tenant.plan.userLimit) {
+      throw new Error(`Limite de usuários do plano atingido (${tenant.plan.userLimit}). Faça upgrade para adicionar mais pessoas.`);
     }
   }
 
-  // 2. Verifica se o usuário já existe no sistema
+  // 2. Verifica se o usuário já existe no sistema (para vincular ID)
   const existingUser = await User.findOne({ where: { email } });
 
   // 3. Cria ou Atualiza o convite (TenantMember)
@@ -205,20 +221,40 @@ const inviteMember = async (currentTenantId, email, role = 'VIEWER') => {
     if (member.status === 'ACTIVE') {
       throw new Error('Este usuário já é membro desta organização.');
     }
-    // Se estava rejeitado ou pendente, renova o convite
+    // Se estava rejeitado ou pendente, renova o convite e atualiza role se mudou
     member.status = 'PENDING';
     member.userId = existingUser ? existingUser.id : null;
     member.role = role;
     await member.save();
   }
 
-  // 4. Envia E-mail (Lógica de Negócio)
+  // 4. Envia E-mail de Notificação
   const inviteLink = existingUser 
-    ? `${process.env.FRONT_URL}/onboarding` // Vai ver o modal de convite
-    : `${process.env.FRONT_URL}/register?email=${email}`; // Vai criar conta
+    ? `${process.env.FRONT_URL}/onboarding` // Usuário já tem conta -> vai para dashboard/onboarding
+    : `${process.env.FRONT_URL}/register?email=${email}`; // Usuário novo -> vai para cadastro
 
-  // TODO: Chamar notificationService real aqui
-  console.log(`[Invite] Enviando convite para ${email}. Link: ${inviteLink}`);
+  try {
+      await notificationService.sendEmail(currentTenantId, {
+          to: email,
+          subject: `Convite para participar de ${tenant.name}`,
+          html: `
+            <div style="font-family: sans-serif; color: #333;">
+                <h2>Olá!</h2>
+                <p>Você foi convidado para fazer parte da equipe <strong>${tenant.name}</strong> na plataforma Doculink.</p>
+                <p style="margin: 20px 0;">
+                    <a href="${inviteLink}" style="background-color: #2563EB; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                        Aceitar Convite
+                    </a>
+                </p>
+                <p><small>Se você já possui uma conta, basta fazer login para ver o convite.</small></p>
+            </div>
+          `
+      });
+      console.log(`[Invite] Convite enviado para ${email}`);
+  } catch (error) {
+      console.error(`[Invite] Erro ao enviar e-mail para ${email}:`, error.message);
+      // Não interrompe o fluxo, o convite foi criado no banco
+  }
   
   return member;
 };
