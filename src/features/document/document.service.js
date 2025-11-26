@@ -37,8 +37,8 @@ const saveSignatureImage = async (base64Image, tenantId, signerId) => {
  * Cria um registro de documento, lida com o upload do arquivo, calcula seu hash
  * e cria o primeiro evento de auditoria.
  */
-const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) => {
-  // --- INÍCIO DA TRAVA DE LIMITE ---
+const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, folderId, user }) => {
+  // --- INÍCIO DA TRAVA DE LIMITE E VALIDAÇÃO ---
   
   // 1. Busca dados do Tenant e do Plano atual
   const tenant = await Tenant.findByPk(user.tenantId, {
@@ -48,9 +48,7 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
   if (!tenant) throw new Error('Organização não encontrada.');
 
   // 2. Verifica status da assinatura (se não for plano gratuito/básico)
-  // Se o plano for pago mas o status não for ACTIVE, bloqueia.
-  // (Assumindo que 'basico' é o free ou barato que não bloqueia por inadimplência imediata, 
-  // ou ajuste conforme sua regra de negócio. Aqui bloquearemos se estiver OVERDUE/CANCELED)
+  // Bloqueia criação se o pagamento estiver atrasado ou cancelado
   if (tenant.subscriptionStatus && ['OVERDUE', 'CANCELED'].includes(tenant.subscriptionStatus)) {
       throw new Error('Sua assinatura está pendente ou cancelada. Regularize para criar novos documentos.');
   }
@@ -69,10 +67,11 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
 
   const transaction = await sequelize.transaction();
   try {
-    // ... (resto do código original da função createDocument...)
+    // 4. Cria o registro no banco de dados (Status Inicial: DRAFT)
     const doc = await Document.create({
       tenantId: user.tenantId,
       ownerId: user.id,
+      folderId: folderId || null, // <--- VINCULA À PASTA (ou Raiz se null)
       title: title || file.originalname,
       deadlineAt,
       mimeType: file.mimetype,
@@ -80,22 +79,29 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
       status: 'DRAFT',
     }, { transaction });
     
-    // ... (lógica de mover arquivo e salvar hash) ...
+    // 5. Prepara diretório permanente
+    // Caminho: uploads/{tenantId}/{docId}.pdf
     const permanentDir = path.join(__dirname, '..', '..', '..', 'uploads', user.tenantId);
     await fs.mkdir(permanentDir, { recursive: true });
+    
     const fileExtension = path.extname(file.originalname);
     const permanentPath = path.join(permanentDir, `${doc.id}${fileExtension}`);
     
+    // 6. Move o arquivo da pasta temporária (multer) para a pasta permanente
     await fs.rename(file.path, permanentPath);
 
+    // 7. Calcula o Hash SHA256 para garantia de integridade
     const fileBuffer = await fs.readFile(permanentPath);
     const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
+    // 8. Atualiza o documento com o caminho final e o hash
+    // Salva o caminho relativo para ser portável
     doc.storageKey = path.relative(path.join(__dirname, '..', '..', '..'), permanentPath);
     doc.sha256 = sha256;
-    doc.status = 'READY';
+    doc.status = 'READY'; // Agora está pronto para assinaturas
     await doc.save({ transaction });
 
+    // 9. Registra o evento de Upload na Auditoria
     await auditService.createEntry({
       tenantId: user.tenantId,
       actorKind: 'USER',
@@ -103,18 +109,24 @@ const createDocumentAndHandleUpload = async ({ file, title, deadlineAt, user }) 
       entityType: 'DOCUMENT',
       entityId: doc.id,
       action: 'STORAGE_UPLOADED',
-      ip: 'SYSTEM', 
+      ip: 'SYSTEM', // Upload inicial geralmente não captura IP do cliente no service, mas pode ser passado se necessário
       userAgent: 'SYSTEM',
       payload: { fileName: file.originalname, sha256 }
     }, transaction);
 
     await transaction.commit();
     return doc;
+
   } catch (error) {
     await transaction.rollback();
-    // Limpeza de arquivo temporário
+    
+    // Limpeza de arquivo temporário em caso de erro no banco
     if (file && file.path) {
-        require('fs').unlink(file.path, (err) => { if(err) console.error(err); });
+        try {
+            await fs.unlink(file.path);
+        } catch (err) {
+            console.error("Erro ao limpar arquivo temporário:", err);
+        }
     }
     throw error;
   }

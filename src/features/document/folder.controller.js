@@ -30,4 +30,12 @@ const remove = async (req, res, next) => {
     } catch(e) { next(e); }
 };
 
-module.exports = { create, list, move, remove };
+const rename = async (req, res, next) => {
+    try {
+        const { name } = req.body;
+        const result = await folderService.renameFolder(req.user, req.params.id, name);
+        res.status(200).json(result);
+    } catch(e) { next(e); }
+};
+
+module.exports = { create, list, move, remove, rename };

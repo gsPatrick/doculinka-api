@@ -47,4 +47,7 @@ router.post('/move', roleGuard(['ADMIN', 'MANAGER']), folderController.move);
  */
 router.delete('/:id', roleGuard(['ADMIN', 'MANAGER']), folderController.remove);
 
+router.patch('/:id', roleGuard(['ADMIN', 'MANAGER']), folderController.rename);
+
+
 module.exports = router;

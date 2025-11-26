@@ -7,11 +7,14 @@ const createDocument = async (req, res, next) => {
     if (!req.file) {
       return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
     }
-    const { title, deadlineAt } = req.body;
+    // folderId vem como string no FormData
+    const { title, deadlineAt, folderId } = req.body; 
+    
     const document = await documentService.createDocumentAndHandleUpload({
       file: req.file,
       title,
       deadlineAt,
+      folderId: folderId === 'root' ? null : folderId, // Trata 'root' como null
       user: req.user
     });
     return res.status(201).json(document);

@@ -125,4 +125,13 @@ const deleteFolder = async (user, folderId) => {
     return { message: 'Pasta removida. Os documentos foram movidos para a raiz.' };
 };
 
-module.exports = { createFolder, listContents, moveItem, deleteFolder };
+const renameFolder = async (user, folderId, newName) => {
+    const folder = await Folder.findOne({ where: { id: folderId, tenantId: user.tenantId } });
+    if (!folder) throw new Error('Pasta não encontrada.');
+    
+    folder.name = newName;
+    await folder.save();
+    return folder;
+};
+
+module.exports = { createFolder, listContents, moveItem, deleteFolder,renameFolder };
