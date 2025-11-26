@@ -23,7 +23,24 @@ const app = express();
 const PORT = process.env.PORT || 3333;
 
 // 4. Configuração dos Middlewares
-app.use(helmet());
+
+// --- CONFIGURAÇÃO DE SEGURANÇA ATUALIZADA (CSP) ---
+// Permite que o frontend carregue PDFs e iframes sem bloqueio do navegador
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "img-src": ["'self'", "data:", "blob:"],
+        "frame-src": ["'self'", "*"], // Permite que o backend carregue iframes
+        "frame-ancestors": ["'self'", "*"], // Permite que o backend seja carregado em iframes
+      },
+    },
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // Permite carregar recursos (PDFs) em outros domínios/portas
+  })
+);
+// --------------------------------------------------
+
 app.use(cors({ origin: '*' })); // Em produção, restrinja para a URL do front
 app.use(express.json());
 
