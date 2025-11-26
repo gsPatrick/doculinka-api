@@ -4,104 +4,92 @@
 const { Folder, Document, User } = require('../../models');
 const { Op } = require('sequelize');
 
-/**
- * Cria uma nova pasta.
- */
-const createFolder = async (user, { name, parentId, color }) => {
-    // Validação de segurança: se tiver parentId, ele deve pertencer ao mesmo tenant
+// Note que adicionamos 'tenantId' na desestruturação ou como argumento extra
+
+const createFolder = async (user, { name, parentId, color, tenantId }) => {
+    const targetTenant = tenantId || user.tenantId;
+
     if (parentId) {
-        const parent = await Folder.findOne({ where: { id: parentId, tenantId: user.tenantId } });
+        const parent = await Folder.findOne({ where: { id: parentId, tenantId: targetTenant } });
         if (!parent) throw new Error('Pasta pai não encontrada ou acesso negado.');
     }
 
     return Folder.create({
-        tenantId: user.tenantId,
-        ownerId: user.id,
+        tenantId: targetTenant,
+        ownerId: user.id, // O criador continua sendo o admin logado
         parentId: parentId || null,
         name,
         color
     });
 };
 
-/**
- * Lista conteúdo (Pastas e Arquivos) aplicando filtros.
- */
-const listContents = async (user, { parentId, search }) => {
-    const folderWhere = { tenantId: user.tenantId };
-    const docWhere = { tenantId: user.tenantId };
+const listContents = async (user, { parentId, search, tenantId }) => {
+    const targetTenant = tenantId || user.tenantId;
+
+    const folderWhere = { tenantId: targetTenant };
+    const docWhere = { tenantId: targetTenant };
 
     if (search) {
-        // --- MODO BUSCA (Global) ---
-        // Se o usuário digita algo, ignoramos a hierarquia e buscamos em tudo
-        folderWhere.name = { [Op.iLike]: `%${search}%` }; // Case insensitive
+        folderWhere.name = { [Op.iLike]: `%${search}%` };
         docWhere.title = { [Op.iLike]: `%${search}%` };
-        // Removemos restrição de parentId/folderId para buscar em qualquer nível
     } else {
-        // --- MODO NAVEGAÇÃO (Hierárquico) ---
-        // Se parentId for 'root' ou undefined, buscamos onde parentId/folderId é NULL
         const targetId = (parentId === 'root' || !parentId) ? null : parentId;
-        
         folderWhere.parentId = targetId;
         docWhere.folderId = targetId;
     }
 
-    // Busca Pastas
     const folders = await Folder.findAll({
         where: folderWhere,
         order: [['name', 'ASC']],
         include: [{ model: User, as: 'creator', attributes: ['name'] }]
     });
 
-    // Busca Documentos (exclui os cancelados da visualização padrão)
     docWhere.status = { [Op.ne]: 'CANCELLED' }; 
     
     const documents = await Document.findAll({
         where: docWhere,
         order: [['createdAt', 'DESC']],
-        include: [
-            { model: User, as: 'owner', attributes: ['name'] }
-        ]
+        include: [{ model: User, as: 'owner', attributes: ['name'] }]
     });
 
-    // Se estiver navegando, retorna breadcrumbs (caminho de pão)
     let breadcrumbs = [];
     if (parentId && parentId !== 'root' && !search) {
         let current = await Folder.findByPk(parentId);
-        while(current) {
-            breadcrumbs.unshift({ id: current.id, name: current.name });
-            if (current.parentId) {
-                current = await Folder.findByPk(current.parentId);
-            } else {
-                current = null;
+        // Segurança: garantir que a pasta pertence ao tenant alvo
+        if(current && current.tenantId === targetTenant) {
+            while(current) {
+                breadcrumbs.unshift({ id: current.id, name: current.name });
+                if (current.parentId) {
+                    current = await Folder.findByPk(current.parentId);
+                } else {
+                    current = null;
+                }
             }
         }
         breadcrumbs.unshift({ id: 'root', name: 'Início' });
     }
 
-    return {
-        breadcrumbs,
-        folders,
-        documents
-    };
+    return { breadcrumbs, folders, documents };
 };
 
-const moveItem = async (user, { itemId, itemType, targetFolderId }) => {
-    // Verifica destino
+const moveItem = async (user, { itemId, itemType, targetFolderId, tenantId }) => {
+    const targetTenant = tenantId || user.tenantId;
+    
     let targetId = targetFolderId;
     if (targetId === 'root') targetId = null;
 
     if (targetId) {
-        const target = await Folder.findOne({ where: { id: targetId, tenantId: user.tenantId } });
+        const target = await Folder.findOne({ where: { id: targetId, tenantId: targetTenant } });
         if (!target) throw new Error('Pasta de destino inválida.');
     }
 
     if (itemType === 'DOCUMENT') {
-        const doc = await Document.findOne({ where: { id: itemId, tenantId: user.tenantId } });
+        const doc = await Document.findOne({ where: { id: itemId, tenantId: targetTenant } });
         if (!doc) throw new Error('Documento não encontrado.');
         doc.folderId = targetId;
         await doc.save();
     } else {
-        const folder = await Folder.findOne({ where: { id: itemId, tenantId: user.tenantId } });
+        const folder = await Folder.findOne({ where: { id: itemId, tenantId: targetTenant } });
         if (!folder) throw new Error('Pasta não encontrada.');
         if (targetId === itemId) throw new Error('Movimento ilegal.');
         folder.parentId = targetId;
@@ -110,23 +98,19 @@ const moveItem = async (user, { itemId, itemType, targetFolderId }) => {
     return { message: 'Item movido com sucesso.' };
 };
 
-const deleteFolder = async (user, folderId) => {
-    const folder = await Folder.findOne({ where: { id: folderId, tenantId: user.tenantId } });
+const deleteFolder = async (user, folderId, tenantId) => {
+    const targetTenant = tenantId || user.tenantId;
+    const folder = await Folder.findOne({ where: { id: folderId, tenantId: targetTenant } });
     if (!folder) throw new Error('Pasta não encontrada.');
 
-    // Move documentos de dentro dela para a Raiz (para não perder arquivos importantes)
     await Document.update({ folderId: null }, { where: { folderId } });
-    
-    // Deleta subpastas (Recursão simples: deleta as pastas filhas, documentos delas viram órfãos na raiz tb? 
-    // Simplificação: só deleta a pasta alvo. Se tiver subpastas, banco pode reclamar se não tiver CASCADE)
-    // Aqui assumimos soft delete ou delete simples.
     await folder.destroy();
-    
-    return { message: 'Pasta removida. Os documentos foram movidos para a raiz.' };
+    return { message: 'Pasta removida.' };
 };
 
-const renameFolder = async (user, folderId, newName) => {
-    const folder = await Folder.findOne({ where: { id: folderId, tenantId: user.tenantId } });
+const renameFolder = async (user, folderId, newName, tenantId) => {
+    const targetTenant = tenantId || user.tenantId;
+    const folder = await Folder.findOne({ where: { id: folderId, tenantId: targetTenant } });
     if (!folder) throw new Error('Pasta não encontrada.');
     
     folder.name = newName;
@@ -134,4 +118,4 @@ const renameFolder = async (user, folderId, newName) => {
     return folder;
 };
 
-module.exports = { createFolder, listContents, moveItem, deleteFolder,renameFolder };
+module.exports = { createFolder, listContents, moveItem, deleteFolder, renameFolder };
