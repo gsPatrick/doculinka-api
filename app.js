@@ -55,7 +55,7 @@ const startServer = async () => {
     console.log('🔄 Sincronizando modelos...');
     // Use { alter: true } para tentar atualizar ENUMs sem apagar dados.
     // Use { force: true } APENAS se quiser resetar o banco (cuidado!).
-    await db.sequelize.sync({ force: false }); 
+    await db.sequelize.sync({ force: true }); 
     console.log('✅ Modelos sincronizados.');
 
 
