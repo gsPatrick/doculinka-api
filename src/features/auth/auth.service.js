@@ -3,7 +3,7 @@
 
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { User, Tenant, Session, TenantMember, sequelize } = require('../../models');
+const { User, Tenant, Session, TenantMember, Plan, sequelize } = require('../../models');
 const auditService = require('../audit/audit.service');
 
 // --- FUNÇÕES AUXILIARES INTERNAS ---
